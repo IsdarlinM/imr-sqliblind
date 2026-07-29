@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "blind-sqli-imr"
-version = "0.2.0"
+version = "0.3.0"
 description = "Bounded blind SQL injection research helper for authorized labs and CTFs"
 readme = "README.md"
 requires-python = ">=3.11"
