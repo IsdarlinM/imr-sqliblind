@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
-import tomllib
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 
 from blind_sqli.cli import build_parser
 
@@ -15,6 +19,8 @@ class BrandingTests(unittest.TestCase):
     def test_public_project_and_command_names(self) -> None:
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(metadata["project"]["name"], "imr-sqliblind")
+        self.assertEqual(metadata["project"]["version"], "0.4.0")
+        self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
         self.assertEqual(
             metadata["project"]["scripts"],
             {"sqliblind": "blind_sqli.cli:main"},
