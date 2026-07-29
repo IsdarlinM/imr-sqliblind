@@ -9,9 +9,12 @@ from . import __version__
 from .client import HttpClient, HttpConfig
 from .dialects import get_dialect
 from .extractor import BlindExtractor, ExtractorConfig
+from .graph import FORMATS, render_database_map, write_report
+from .models import DatabaseMap
 from .oracle import ResponseOracle
 
 BASE_URL = "https://08d9880a384777322d0e2df7db7e5215.ctf.hacker101.com/fetch"
+_MAP_COMMANDS = {"map", "graph", "schema-map"}
 
 
 def _parse_key_value(values: list[str], separator: str, option: str) -> dict[str, str]:
@@ -28,7 +31,10 @@ def _parse_key_value(values: list[str], separator: str, option: str) -> dict[str
 
 
 def _parse_statuses(value: str) -> set[int]:
-    statuses = {int(item.strip()) for item in value.split(",") if item.strip()}
+    try:
+        statuses = {int(item.strip()) for item in value.split(",") if item.strip()}
+    except ValueError as exc:
+        raise ValueError("--true-status must contain integers") from exc
     if not statuses or any(status < 100 or status > 599 for status in statuses):
         raise ValueError("--true-status must contain valid HTTP status codes")
     return statuses
@@ -91,6 +97,21 @@ def build_parser() -> argparse.ArgumentParser:
 
     probe = subparsers.add_parser("probe", help="Evaluate one boolean SQL condition")
     probe.add_argument("--condition", required=True)
+
+    graph = subparsers.add_parser(
+        "map",
+        aliases=("graph", "schema-map"),
+        help="Enumerate and represent schema/table/column relationships",
+    )
+    graph.add_argument("--format", choices=tuple(sorted(FORMATS)), default="tree")
+    graph.add_argument("--output", help="Report destination (.txt, .mmd, .html, or .json)")
+    graph.add_argument("--ascii", action="store_true", dest="ascii_only")
+    graph.add_argument(
+        "--no-columns",
+        action="store_true",
+        help="Stop after schemas and tables to reduce requests",
+    )
+    graph.add_argument("--title", default="blind-sqli schema map")
     return parser
 
 
@@ -134,6 +155,13 @@ def _build_extractor(args: argparse.Namespace) -> BlindExtractor:
     )
 
 
+def _statistics(extractor: BlindExtractor, workers: int) -> str:
+    return (
+        f"Requests: {extractor.client.requests_used} | "
+        f"Elapsed: {round(extractor.elapsed_seconds, 3)}s | Workers: {workers}"
+    )
+
+
 def _emit(args: argparse.Namespace, data: object, extractor: BlindExtractor) -> None:
     result = {
         "result": data,
@@ -148,10 +176,44 @@ def _emit(args: argparse.Namespace, data: object, extractor: BlindExtractor) -> 
             print(f"[{index}] {value}")
     else:
         print(data)
-    print(
-        f"\nRequests: {result['requests']} | Elapsed: {result['elapsed_seconds']}s | "
-        f"Workers: {args.workers}"
+    print(f"\n{_statistics(extractor, args.workers)}")
+
+
+def _emit_map(
+    args: argparse.Namespace, database: DatabaseMap, extractor: BlindExtractor
+) -> None:
+    if args.json_output:
+        document = {
+            "result": database.to_dict(),
+            "requests": extractor.client.requests_used,
+            "elapsed_seconds": round(extractor.elapsed_seconds, 3),
+        }
+        content = json.dumps(document, indent=2, ensure_ascii=False)
+        if args.output:
+            destination = write_report(args.output, content, default_suffix=".json")
+            print(f"Report written: {destination}")
+            print(_statistics(extractor, args.workers))
+        else:
+            print(content)
+        return
+
+    content = render_database_map(
+        database,
+        output_format=args.format,
+        ascii_only=args.ascii_only,
+        title=args.title,
     )
+    output = args.output
+    if args.format == "html" and output is None:
+        output = "blind-sqli-schema-map.html"
+    if output:
+        suffix = ".html" if args.format == "html" else ".txt"
+        destination = write_report(output, content, default_suffix=suffix)
+        print(f"Report written: {destination}")
+        print(_statistics(extractor, args.workers))
+    else:
+        print(content)
+        print(f"\n{_statistics(extractor, args.workers)}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -188,6 +250,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "elapsed_seconds": round(probe.elapsed_seconds, 3),
                 "url": probe.final_url,
             }
+        elif args.command in _MAP_COMMANDS:
+            database = extractor.build_database_map(
+                include_columns=not args.no_columns
+            )
+            _emit_map(args, database, extractor)
+            return 0
         else:
             parser.error(f"Unknown command: {args.command}")
             return 2
