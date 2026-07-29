@@ -42,7 +42,7 @@ def _parse_statuses(value: str) -> set[int]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="blind-sqli",
+        prog="sqliblind",
         description=(
             "Bounded blind SQLi helper for authorized laboratories and CTFs. "
             "The configured BASE_URL is used when --url is omitted."
@@ -111,7 +111,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Stop after schemas and tables to reduce requests",
     )
-    graph.add_argument("--title", default="blind-sqli schema map")
+    graph.add_argument("--title", default="imr-sqliblind schema map")
     return parser
 
 
@@ -205,7 +205,7 @@ def _emit_map(
     )
     output = args.output
     if args.format == "html" and output is None:
-        output = "blind-sqli-schema-map.html"
+        output = "imr-sqliblind-schema-map.html"
     if output:
         suffix = ".html" if args.format == "html" else ".txt"
         destination = write_report(output, content, default_suffix=suffix)
