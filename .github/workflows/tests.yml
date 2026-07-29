@@ -70,10 +70,10 @@ jobs:
       - name: Install with custom prefix
         shell: cmd
         run: |
-          install.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --no-path
+          call install.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --no-path
           call "%RUNNER_TEMP%\imr-sqliblind\bin\sqliblind.cmd" --version
       - name: Uninstall
         shell: cmd
         run: |
-          uninstall.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --no-path
+          call uninstall.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --no-path
           if exist "%RUNNER_TEMP%\imr-sqliblind" exit /b 1
