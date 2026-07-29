@@ -14,6 +14,15 @@ The original target remains the default URL. When `--url` is omitted, the tool u
 https://08d9880a384777322d0e2df7db7e5215.ctf.hacker101.com/fetch
 ```
 
+## Requirements
+
+- Python **3.10 or newer**.
+- Internet access during installation to obtain Python or Python packages when they are not already available.
+- Linux: `bash` plus `curl` or `wget` only when Python must be bootstrapped automatically.
+- Windows: Windows 10/11 with `cmd.exe` and Windows PowerShell, used internally only for user environment variables and the official `uv` bootstrapper.
+
+If a compatible Python is not installed, the native installers bootstrap `uv` and install a managed Python 3.12 runtime. Existing Python 3.10+ installations are reused.
+
 ## Features
 
 - No network traffic during module import.
@@ -29,22 +38,141 @@ https://08d9880a384777322d0e2df7db7e5215.ctf.hacker101.com/fetch
 - Complete schema → table → column maps.
 - CLI tree, relation list, Mermaid, JSON, and self-contained HTML reports.
 - Atomic report writes and escaped HTML identifiers.
+- Native per-user installers and uninstallers for Linux and Windows.
 
-## Installation
+## Native installation
 
-Linux/macOS:
+The installers run without administrator privileges and create an isolated virtual environment for the current user. They install all Python dependencies, create the global `sqliblind` wrapper, persist environment variables, update `PATH`, and verify the command before finishing.
+
+### Linux
 
 ```bash
-python -m venv .venv
+chmod +x install.sh uninstall.sh
+./install.sh
+```
+
+Default locations:
+
+```text
+Application: ~/.local/share/imr-sqliblind
+Command:     ~/.local/bin/sqliblind
+```
+
+Open a new shell after installation, or load the updated profile immediately:
+
+```bash
+source ~/.profile
+sqliblind --version
+```
+
+### Windows CMD
+
+Run from Command Prompt:
+
+```cmd
+install.cmd
+```
+
+Default locations:
+
+```text
+Application: %LOCALAPPDATA%\Programs\imr-sqliblind
+Command:     %LOCALAPPDATA%\Programs\imr-sqliblind\bin\sqliblind.cmd
+```
+
+Open a new CMD window after installation:
+
+```cmd
+sqliblind --version
+sqliblind --help
+```
+
+### Installer options
+
+Linux:
+
+```bash
+./install.sh --help
+./install.sh --prefix "$HOME/tools/imr-sqliblind"
+./install.sh --python /usr/bin/python3.10
+./install.sh --no-path
+```
+
+Windows CMD:
+
+```cmd
+install.cmd --help
+install.cmd --prefix "%USERPROFILE%\Tools\imr-sqliblind"
+install.cmd --python "C:\Python310\python.exe"
+install.cmd --no-path
+```
+
+`--no-path` is intended for CI or portable installations. It creates the environment and wrapper but does not persist user environment variables or modify `PATH`.
+
+### Environment variables
+
+A normal native installation persists:
+
+```text
+IMR_SQLIBLIND_HOME   Installation directory
+SQLIBLIND_PYTHON     Isolated Python executable
+SQLIBLIND_BIN        Directory containing the sqliblind wrapper
+PATH                 Includes SQLIBLIND_BIN
+```
+
+Linux updates `~/.profile` and existing `~/.bashrc` / `~/.zshrc` files using a replaceable marked block. Windows updates only the current user's environment, not the machine-wide environment.
+
+### Updating
+
+Pull the latest repository changes and rerun the installer. Existing user reports and unrelated files outside the installation directory are not modified.
+
+Linux:
+
+```bash
+git pull
+./install.sh
+```
+
+Windows CMD:
+
+```cmd
+git pull
+install.cmd
+```
+
+### Uninstalling
+
+Linux:
+
+```bash
+./uninstall.sh
+```
+
+Windows CMD:
+
+```cmd
+uninstall.cmd
+```
+
+For a custom installation prefix, pass the same `--prefix` value used during installation.
+
+## Manual installation
+
+Linux:
+
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
 ```
 
 Windows CMD:
 
 ```cmd
-python -m venv .venv
+py -3 -m venv .venv
 .venv\Scripts\activate.bat
+python -m pip install --upgrade pip setuptools wheel
 python -m pip install -e .
 ```
 
@@ -216,7 +344,7 @@ sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.3.0" \
+  --header "User-Agent:imr-sqliblind/0.4.0" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
@@ -263,6 +391,7 @@ sqliblind map --help
 ```bash
 python -m unittest discover -s tests -v
 pytest -q
+bash -n install.sh uninstall.sh
 ```
 
 Optional quality checks:
@@ -273,6 +402,8 @@ ruff check .
 mypy src/blind_sqli
 bandit -r src
 ```
+
+GitHub Actions tests Python 3.10, 3.11, 3.12, and 3.13. Dedicated Linux and Windows jobs perform native-installer smoke tests with temporary prefixes.
 
 ## Scope
 
