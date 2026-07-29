@@ -42,6 +42,13 @@ If a compatible Python is not installed, the native installers bootstrap `uv` an
 
 ## Native installation
 
+Clone the repository first:
+
+```bash
+git clone https://github.com/IsdarlinM/imr-sqliblind.git
+cd imr-sqliblind
+```
+
 The installers run without administrator privileges and create an isolated virtual environment for the current user. They install all Python dependencies, create the global `sqliblind` wrapper, persist environment variables, update `PATH`, and verify the command before finishing.
 
 ### Linux
@@ -70,6 +77,8 @@ sqliblind --version
 Run from Command Prompt:
 
 ```cmd
+git clone https://github.com/IsdarlinM/imr-sqliblind.git
+cd imr-sqliblind
 install.cmd
 ```
 
