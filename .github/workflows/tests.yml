@@ -12,11 +12,11 @@ jobs:
   test:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,7 +27,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
       - name: Compile
-        run: python -m compileall -q src sqliblind.py sqli_gallery.py tests
+        run: python -m compileall -q src sqli_gallery.py sqliblind.py tests
+      - name: Validate shell scripts
+        run: bash -n install.sh uninstall.sh
       - name: Unit tests
         run: python -m unittest discover -s tests -v
       - name: Pytest
@@ -36,3 +38,42 @@ jobs:
         run: ruff check .
       - name: Bandit
         run: bandit -q -r src
+
+  installer-linux:
+    name: Linux native installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install with custom prefix
+        run: |
+          chmod +x install.sh uninstall.sh
+          ./install.sh --prefix "$RUNNER_TEMP/imr-sqliblind" --no-path
+          "$RUNNER_TEMP/imr-sqliblind/bin/sqliblind" --version
+      - name: Uninstall
+        run: |
+          ./uninstall.sh --prefix "$RUNNER_TEMP/imr-sqliblind" --no-path
+          test ! -e "$RUNNER_TEMP/imr-sqliblind"
+
+  installer-windows:
+    name: Windows native installer
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install with custom prefix
+        shell: cmd
+        run: |
+          install.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --no-path
+          call "%RUNNER_TEMP%\imr-sqliblind\bin\sqliblind.cmd" --version
+      - name: Uninstall
+        shell: cmd
+        run: |
+          uninstall.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --no-path
+          if exist "%RUNNER_TEMP%\imr-sqliblind" exit /b 1
