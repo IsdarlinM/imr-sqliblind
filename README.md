@@ -1,6 +1,12 @@
-# blind_sqli
+# imr-sqliblind
 
-A bounded blind SQL injection research helper for authorized laboratories and CTFs.
+`imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
+
+The installed command is:
+
+```text
+sqliblind
+```
 
 The original target remains the default URL. When `--url` is omitted, the tool uses:
 
@@ -8,24 +14,25 @@ The original target remains the default URL. When `--url` is omitted, the tool u
 https://08d9880a384777322d0e2df7db7e5215.ctf.hacker101.com/fetch
 ```
 
-## Improvements in v0.3.0
+## Features
 
-- No network traffic occurs when modules are imported.
-- Safe URL parameter encoding and replacement.
+- No network traffic during module import.
+- Safe query-parameter encoding and URL-template replacement.
 - TLS verification enabled by default.
-- Timeouts, limited retries, global request budget, and global rate limiting.
-- Configurable status, marker, regex, or response-length oracle.
+- Timeouts, bounded retries, global request budget, and global rate limiting.
+- Status, body-marker, regex, and response-length oracles.
 - Automatic TRUE/FALSE oracle calibration.
-- MySQL and SQLite dialect support.
-- Concurrent schema, table, and column extraction with `ThreadPoolExecutor`.
-- Complete database map: schema → table → column.
-- CLI tree and relation representations.
-- Mermaid graph export.
-- Self-contained interactive HTML schema graph.
-- Atomic TXT, JSON, Mermaid, and HTML report writes.
-- HTML escaping and a restrictive Content Security Policy.
+- MySQL and SQLite dialects.
+- Binary-search inference for integers, lengths, and characters.
+- Bounded multithreading with deterministic output ordering.
+- Schema, table, and column enumeration.
+- Complete schema → table → column maps.
+- CLI tree, relation list, Mermaid, JSON, and self-contained HTML reports.
+- Atomic report writes and escaped HTML identifiers.
 
 ## Installation
+
+Linux/macOS:
 
 ```bash
 python -m venv .venv
@@ -41,38 +48,51 @@ python -m venv .venv
 python -m pip install -e .
 ```
 
+Confirm the installation:
+
+```bash
+sqliblind --version
+sqliblind --help
+```
+
 ## Basic usage
 
 Running without a command enumerates schemas using the default URL and `id` parameter:
 
 ```bash
-python sqli_gallery.py
+sqliblind
 ```
 
 Explicit commands:
 
 ```bash
-blind-sqli schemas
-blind-sqli tables --schema level5
-blind-sqli columns --schema level5 --table photos
-blind-sqli extract --expression "SELECT DATABASE()"
-blind-sqli probe --condition "1=1"
+sqliblind schemas
+sqliblind tables --schema level5
+sqliblind columns --schema level5 --table photos
+sqliblind extract --expression "SELECT DATABASE()"
+sqliblind probe --condition "1=1"
 ```
 
 Use another authorized target:
 
 ```bash
-blind-sqli --url "https://lab.example/fetch" --parameter id schemas
+sqliblind --url "https://lab.example/fetch" --parameter id schemas
+```
+
+The legacy entry point remains available for compatibility:
+
+```bash
+python sqli_gallery.py
 ```
 
 ## Schema maps and graphs
 
-`map`, `graph`, and `schema-map` are aliases. They enumerate the hierarchy and then render it.
+`map`, `graph`, and `schema-map` are aliases.
 
 ### CLI tree
 
 ```bash
-blind-sqli --workers 6 map
+sqliblind --workers 6 map
 ```
 
 Example:
@@ -94,120 +114,109 @@ Relationships: 3
 ASCII-only terminals:
 
 ```bash
-blind-sqli map --ascii
+sqliblind map --ascii
 ```
 
-### Text export
+### TXT reports
 
 ```bash
-blind-sqli map --format tree --output reports/schema-map.txt
-blind-sqli map --format relations --output reports/relations.txt
+sqliblind map --format tree --output reports/schema-map.txt
+sqliblind map --format relations --output reports/relations.txt
 ```
 
 When the path has no extension, `.txt` is added automatically.
 
-### Mermaid graph
+### Mermaid
 
 ```bash
-blind-sqli map --format mermaid --output reports/schema-map.mmd
+sqliblind map --format mermaid --output reports/schema-map.mmd
 ```
 
-The generated file can be pasted into a Mermaid-compatible Markdown renderer.
-
-### Interactive HTML graph
+### Interactive HTML
 
 ```bash
-blind-sqli map --format html --output reports/schema-map.html
+sqliblind map --format html --output reports/schema-map.html
 ```
 
-When `--output` is omitted for HTML, the default file is:
+Without `--output`, the generated file is:
 
 ```text
-blind-sqli-schema-map.html
+imr-sqliblind-schema-map.html
 ```
 
-The HTML report is self-contained and includes:
-
-- schema, table, column, and relationship counters;
-- collapsible schema and table nodes;
-- client-side filtering;
-- expand/collapse controls;
-- responsive desktop/mobile layout;
-- no remote scripts, fonts, styles, or images;
-- escaped discovered identifiers and a restrictive CSP.
+The HTML report is self-contained and includes counters, expandable nodes, filtering, expand/collapse controls, responsive layout, escaped identifiers, and a restrictive Content Security Policy. It does not load external scripts, fonts, styles, images, or CDNs.
 
 Custom title:
 
 ```bash
-blind-sqli map --format html --title "Authorized lab schema map"
+sqliblind map --format html --title "Authorized lab schema map"
+```
+
+### JSON
+
+```bash
+sqliblind --json map
+sqliblind --json map --output reports/schema-map.json
 ```
 
 ### Faster partial map
 
-Stop after schemas and tables to reduce requests:
+Stop after schemas and tables:
 
 ```bash
-blind-sqli map --no-columns
-```
-
-### JSON map
-
-```bash
-blind-sqli --json map
-blind-sqli --json map --output reports/schema-map.json
+sqliblind map --no-columns
 ```
 
 ## Safe concurrency
 
-`--workers` controls independent extraction jobs. Each character remains sequential because blind inference depends on previous comparisons, but independent names and metadata counts are processed concurrently.
+`--workers` controls independent extraction jobs. Character inference remains sequential, while independent names and metadata counts are processed concurrently.
 
 ```bash
-blind-sqli --workers 8 --delay 0.1 --max-requests 5000 map
+sqliblind --workers 8 --delay 0.1 --max-requests 5000 map
 ```
 
 Safety characteristics:
 
-- `1 <= workers <= 16`
-- one active thread pool per extraction phase, avoiding nested executors
-- global request delay shared by every worker
-- global request limit shared by every worker
-- one `requests.Session` per thread
-- deterministic result ordering
-- pending work cancellation after a worker failure
-- redirects are not followed
-- TLS validation is enabled unless `--insecure` is explicitly passed
+- `1 <= workers <= 16`.
+- One active thread pool per extraction phase.
+- Shared global request delay and request limit.
+- One `requests.Session` per worker thread.
+- Deterministic result ordering.
+- Pending-work cancellation after worker failure.
+- Redirects are not followed.
+- TLS verification is enabled unless `--insecure` is explicitly passed.
 
 ## Oracle modes
 
 Status code, default:
 
 ```bash
-blind-sqli --oracle status --true-status 200 schemas
+sqliblind --oracle status --true-status 200 schemas
 ```
 
 Body marker:
 
 ```bash
-blind-sqli --oracle marker --true-marker "RESULT=TRUE" schemas
+sqliblind --oracle marker --true-marker "RESULT=TRUE" schemas
 ```
 
 Regular expression:
 
 ```bash
-blind-sqli --oracle regex --true-regex "Welcome\s+back" schemas
+sqliblind --oracle regex --true-regex "Welcome\s+back" schemas
 ```
 
 Response length:
 
 ```bash
-blind-sqli --oracle length --true-length 3246 --length-tolerance 3 schemas
+sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 ```
 
 ## Headers, cookies, proxy, and TLS
 
 ```bash
-blind-sqli \
-  --header "User-Agent:blind-sqli-lab/0.3.0" \
+sqliblind \
+  --header "User-Agent:imr-sqliblind/0.3.0" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
@@ -218,7 +227,7 @@ Use `--insecure` only in a controlled laboratory with a known self-signed certif
 ## URL template mode
 
 ```bash
-blind-sqli \
+sqliblind \
   --url-template "https://lab.example/fetch?id={{PAYLOAD}}" \
   schemas
 ```
@@ -237,26 +246,23 @@ blind-sqli \
 --max-char-code 126
 ```
 
-Increase a bound explicitly only when the authorized laboratory requires it.
-
 ## Help
 
 ```bash
-blind-sqli --help
-blind-sqli schemas --help
-blind-sqli tables --help
-blind-sqli columns --help
-blind-sqli extract --help
-blind-sqli probe --help
-blind-sqli map --help
+sqliblind --help
+sqliblind schemas --help
+sqliblind tables --help
+sqliblind columns --help
+sqliblind extract --help
+sqliblind probe --help
+sqliblind map --help
 ```
 
 ## Tests
 
-The suite covers commands, aliases, all CLI arguments, URL handling, HTTP controls, each oracle, both SQL dialects, binary inference, bounded threading, data models, all graph formats, report writing, HTML escaping, and import safety.
-
 ```bash
 python -m unittest discover -s tests -v
+pytest -q
 ```
 
 Optional quality checks:
@@ -266,9 +272,8 @@ python -m pip install -e ".[dev]"
 ruff check .
 mypy src/blind_sqli
 bandit -r src
-pytest
 ```
 
 ## Scope
 
-Metadata enumeration includes schemas, tables, and columns. Arbitrary scalar expressions can be extracted with `extract`. Automated bulk row dumping is intentionally not included; keep tests minimal and within the authorized scope.
+Metadata enumeration includes schemas, tables, and columns. Arbitrary scalar expressions can be extracted with `extract`. Automated bulk row dumping is intentionally excluded. Keep all testing minimal and within the authorized scope.
