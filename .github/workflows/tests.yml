@@ -1,4 +1,4 @@
-name: tests
+name: imr-sqliblind tests
 
 "on":
   push:
@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
       - name: Compile
-        run: python -m compileall -q src sqli_gallery.py tests
+        run: python -m compileall -q src sqliblind.py sqli_gallery.py tests
       - name: Unit tests
         run: python -m unittest discover -s tests -v
       - name: Pytest
