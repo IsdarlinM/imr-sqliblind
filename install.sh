@@ -121,7 +121,7 @@ if [[ -z "$PYTHON_BIN" ]]; then
   PYTHON_BIN="$("$UV_BIN" python find "$MANAGED_PYTHON")"
 fi
 python_is_compatible "$PYTHON_BIN" || die "Unable to locate Python 3.10 or newer"
-log "Using $($PYTHON_BIN --version 2>&1) at $PYTHON_BIN"
+log "Using $("$PYTHON_BIN" --version 2>&1) at $PYTHON_BIN"
 
 if [[ -x "$VENV_DIR/bin/python" ]] && ! python_is_compatible "$VENV_DIR/bin/python"; then
   warn "Existing environment uses an unsupported Python; recreating it"
