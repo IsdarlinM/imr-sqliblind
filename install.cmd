@@ -1,5 +1,5 @@
 @echo off
-setlocal EnableExtensions EnableDelayedExpansion
+setlocal EnableExtensions
 
 set "APP_NAME=imr-sqliblind"
 set "COMMAND_NAME=sqliblind"
