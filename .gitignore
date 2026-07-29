@@ -11,4 +11,4 @@ build/
 .env
 results/
 reports/
-blind-sqli-schema-map.html
+imr-sqliblind-schema-map.html
