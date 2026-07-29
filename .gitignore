@@ -10,3 +10,5 @@ build/
 *.egg-info/
 .env
 results/
+reports/
+blind-sqli-schema-map.html
