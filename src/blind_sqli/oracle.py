@@ -37,6 +37,8 @@ class ResponseOracle:
             raise OracleConfigurationError("--true-regex is required for regex mode")
         if mode == "length" and expected_length is None:
             raise OracleConfigurationError("--true-length is required for length mode")
+        if length_tolerance < 0:
+            raise OracleConfigurationError("--length-tolerance cannot be negative")
         compiled = re.compile(regex) if regex else None
         return cls(
             mode=mode,
