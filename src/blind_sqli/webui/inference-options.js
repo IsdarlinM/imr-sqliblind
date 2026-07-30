@@ -319,10 +319,14 @@ renderGraph = function renderCompactGraph() {
 const baseRenderActivities = renderActivities;
 renderActivities = function renderOnlyActiveWorkers() {
   const allActivities = state.activities;
+  const workerLimit = Math.max(
+    1,
+    Number(state.scan?.config?.workers || state.scan?.config?.max_workers || 1),
+  );
   const activeActivities = new Map(
-    [...allActivities.entries()].filter(
-      ([, activity]) => activity.status === "running",
-    ),
+    [...allActivities.entries()]
+      .filter(([, activity]) => activity.status === "running")
+      .slice(0, workerLimit),
   );
   state.activities = activeActivities;
   try {
