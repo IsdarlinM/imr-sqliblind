@@ -2,42 +2,38 @@
 
 `imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
 
-The installed command is:
-
 ```text
-sqliblind
+imr-sqliblind
+imr :: v0.5.0
 ```
 
-The original target remains the default URL. When `--url` is omitted, the tool uses:
-
-```text
-https://08d9880a384777322d0e2df7db7e5215.ctf.hacker101.com/fetch
-```
+The installed command is `sqliblind`. Version 0.5.0 adds a persistent realtime web console while keeping the CLI as the shared extraction engine.
 
 ## Requirements
 
 - Python **3.10 or newer**.
-- Internet access during installation to obtain Python or Python packages when they are not already available.
-- Linux: `bash` plus `curl` or `wget` only when Python must be bootstrapped automatically.
-- Windows: Windows 10/11 with `cmd.exe` and Windows PowerShell, used internally only for user environment variables and the official `uv` bootstrapper.
+- Internet access during installation when Python or packages are not already available.
+- Linux: Bash, plus `curl` or `wget` only when Python must be bootstrapped.
+- Windows 10/11: CMD and Windows PowerShell, used internally by the installer.
 
-If a compatible Python is not installed, the native installers bootstrap `uv` and install a managed Python 3.12 runtime. Existing Python 3.10+ installations are reused.
+When Python 3.10+ is missing, the native installers use the official `uv` bootstrapper and install a managed Python 3.12 runtime.
 
 ## Features
 
-- No network traffic during module import.
-- Safe query-parameter encoding and URL-template replacement.
-- TLS verification enabled by default.
-- Timeouts, bounded retries, global request budget, and global rate limiting.
-- Status, body-marker, regex, and response-length oracles.
-- Automatic TRUE/FALSE oracle calibration.
+- Status, marker, regex, and response-length boolean oracles.
 - MySQL and SQLite dialects.
-- Binary-search inference for integers, lengths, and characters.
-- Bounded multithreading with deterministic output ordering.
-- Schema, table, and column enumeration.
-- Complete schema → table → column maps.
-- CLI tree, relation list, Mermaid, JSON, and self-contained HTML reports.
-- Atomic report writes and escaped HTML identifiers.
+- Binary-search inference for counts, lengths, and characters.
+- Bounded concurrency with a shared request budget and global delay.
+- Schema, table, column, row, and cell entities.
+- Unicode/ASCII trees, relationship lists, Mermaid, JSON, and HTML exports.
+- Realtime web console with REST and Server-Sent Events (SSE).
+- Typed discovery events and dynamic entity updates.
+- Persistent SQLite workspaces and session history.
+- Pause, resume, stop, search, filtering, entity details, and exports from the browser.
+- Live SVG relationship graph that updates as schemas, tables, columns, rows, and cells appear.
+- Opt-in row extraction with strict row, column, value-length, and byte limits.
+- Sensitive-looking values masked by default.
+- TLS validation enabled by default and redirects disabled.
 - Native per-user installers and uninstallers for Linux and Windows.
 
 ## Native installation
@@ -49,13 +45,13 @@ git clone https://github.com/IsdarlinM/imr-sqliblind.git
 cd imr-sqliblind
 ```
 
-The installers run without administrator privileges and create an isolated virtual environment for the current user. They install all Python dependencies, create the global `sqliblind` wrapper, persist environment variables, update `PATH`, and verify the command before finishing.
-
 ### Linux
 
 ```bash
 chmod +x install.sh uninstall.sh
 ./install.sh
+source ~/.profile
+sqliblind --version
 ```
 
 Default locations:
@@ -65,21 +61,19 @@ Application: ~/.local/share/imr-sqliblind
 Command:     ~/.local/bin/sqliblind
 ```
 
-Open a new shell after installation, or load the updated profile immediately:
-
-```bash
-source ~/.profile
-sqliblind --version
-```
-
 ### Windows CMD
-
-Run from Command Prompt:
 
 ```cmd
 git clone https://github.com/IsdarlinM/imr-sqliblind.git
 cd imr-sqliblind
 install.cmd
+```
+
+Open a new CMD window and verify:
+
+```cmd
+sqliblind --version
+sqliblind --help
 ```
 
 Default locations:
@@ -89,16 +83,15 @@ Application: %LOCALAPPDATA%\Programs\imr-sqliblind
 Command:     %LOCALAPPDATA%\Programs\imr-sqliblind\bin\sqliblind.cmd
 ```
 
-Open a new CMD window after installation:
+Both installers install the CLI and web dependencies, create an isolated virtual environment, configure `PATH`, and persist:
 
-```cmd
-sqliblind --version
-sqliblind --help
+```text
+IMR_SQLIBLIND_HOME
+SQLIBLIND_PYTHON
+SQLIBLIND_BIN
 ```
 
-### Installer options
-
-Linux:
+Installer options:
 
 ```bash
 ./install.sh --help
@@ -107,8 +100,6 @@ Linux:
 ./install.sh --no-path
 ```
 
-Windows CMD:
-
 ```cmd
 install.cmd --help
 install.cmd --prefix "%USERPROFILE%\Tools\imr-sqliblind"
@@ -116,33 +107,14 @@ install.cmd --python "C:\Python310\python.exe"
 install.cmd --no-path
 ```
 
-`--no-path` is intended for CI or portable installations. It creates the environment and wrapper but does not persist user environment variables or modify `PATH`.
-
-### Environment variables
-
-A normal native installation persists:
-
-```text
-IMR_SQLIBLIND_HOME   Installation directory
-SQLIBLIND_PYTHON     Isolated Python executable
-SQLIBLIND_BIN        Directory containing the sqliblind wrapper
-PATH                 Includes SQLIBLIND_BIN
-```
-
-Linux updates `~/.profile` and existing `~/.bashrc` / `~/.zshrc` files using a replaceable marked block. Windows updates only the current user's environment, not the machine-wide environment.
-
 ### Updating
 
-Pull the latest repository changes and rerun the installer. Existing user reports and unrelated files outside the installation directory are not modified.
-
-Linux:
+There is currently no `sqliblind update` command. Pull the repository and rerun the installer:
 
 ```bash
 git pull
 ./install.sh
 ```
-
-Windows CMD:
 
 ```cmd
 git pull
@@ -151,50 +123,165 @@ install.cmd
 
 ### Uninstalling
 
-Linux:
-
 ```bash
 ./uninstall.sh
 ```
-
-Windows CMD:
 
 ```cmd
 uninstall.cmd
 ```
 
-For a custom installation prefix, pass the same `--prefix` value used during installation.
+## Live activity progress
 
-## Manual installation
+The CLI and web console show **current work**, not a guessed percentage. Concurrent workers are displayed like parallel downloads, with one activity row/card per active task.
 
-Linux:
+Typical activity messages include:
+
+```text
+Count tables              main                  searching integer in range 0..64
+Extract table name        main · table slot 2   extracting character 4/11
+Count columns             main.users            resolved integer: 7
+Extract cell value        main.users · row 1 · email  extracted 8/24 characters
+```
+
+In an interactive terminal the default `auto` mode uses an in-place multi-worker display on stderr, keeping final results on stdout:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
+sqliblind --workers 6 map
 ```
 
-Windows CMD:
-
-```cmd
-py -3 -m venv .venv
-.venv\Scripts\activate.bat
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -e .
-```
-
-Confirm the installation:
+Progress modes:
 
 ```bash
-sqliblind --version
-sqliblind --help
+sqliblind --progress live map      # force the dynamic terminal view
+sqliblind --progress plain map     # append start/completion lifecycle lines
+sqliblind --progress off map       # disable activity output
+sqliblind --json map               # JSON stays clean; progress is disabled automatically
 ```
 
-## Basic usage
+The web console persists activity state in SQLite, streams updates through SSE, and restores active/recent tasks after a page reload. Each card shows the worker, operation, target object, current extraction step, elapsed time, request count, and count-based details such as `character 4/11`; it intentionally does not show percentages.
 
-Running without a command enumerates schemas using the default URL and `id` parameter:
+## Realtime web console
+
+Start the local console:
+
+```bash
+sqliblind web
+```
+
+Defaults:
+
+```text
+Host: 127.0.0.1
+Port: 8088
+Linux workspace:  ~/.local/share/imr-sqliblind/workspaces/sessions.db
+Windows workspace: %LOCALAPPDATA%\Programs\imr-sqliblind\workspaces\sessions.db
+```
+
+When `IMR_SQLIBLIND_HOME` is configured by the native installer, the console stores workspaces below that installation directory.
+
+The command generates a random authentication token, opens a tokenized bootstrap URL, stores the token in an `HttpOnly` `SameSite=Strict` cookie, redirects to a clean URL, and uses a separate double-submit CSRF token for state-changing requests.
+
+Useful options:
+
+```bash
+sqliblind web --port 9000
+sqliblind web --workspace "$HOME/sqliblind-workspaces"
+sqliblind web --no-open-browser
+```
+
+Remote binding is blocked unless explicitly enabled. Remote access also requires an explicit token and TLS certificate/key pair:
+
+```bash
+sqliblind web \
+  --host 0.0.0.0 \
+  --allow-remote \
+  --token "a-long-random-token" \
+  --ssl-certfile server.crt \
+  --ssl-keyfile server.key
+```
+
+### Realtime entities
+
+The console represents discoveries as typed entities:
+
+```text
+Scan
+└── Schema
+    └── Table
+        ├── Column
+        └── Row
+            └── Cell
+```
+
+Entity states include:
+
+```text
+queued
+running
+paused
+discovering
+complete
+stopping
+cancelled
+failed
+interrupted
+```
+
+The web form exposes the same target, URL-template, oracle, HTTP, proxy, header, cookie, TLS, concurrency, and extraction-limit controls as the CLI. Findings can be viewed as a hierarchy, a live SVG graph, entity cards, explicit relationships, or raw events. Selecting an object opens a right-side detail drawer with its structured data and related edges.
+
+The browser receives events through SSE, including:
+
+```text
+scan.started
+scan.calibrated
+phase.started
+schema.discovered
+table.discovered
+column.discovered
+row.discovered
+cell.discovered
+entity.updated
+relationship.created
+request.completed
+scan.paused
+scan.resumed
+scan.completed
+scan.failed
+scan.cancelled
+```
+
+### Persistence
+
+SQLite stores:
+
+- Scan configuration with sensitive headers and cookies redacted.
+- Scan status and statistics.
+- Ordered typed events.
+- Entities and parent relationships.
+- Completed and interrupted session history.
+
+SQLite uses foreign keys, WAL mode, parameterized queries, and a process-local write lock for concurrent extractor events.
+
+### Bounded row extraction
+
+Row extraction is disabled by default. In the web form, enable it and specify one or more exact `schema.table` selectors.
+
+Hard web limits:
+
+```text
+Rows per table:      1–25
+Columns per table:   1–20
+Value length:        1–512 characters
+Total extracted:     1–50,000 bytes
+Workers:             1–16
+```
+
+Sensitive-looking columns such as passwords, tokens, sessions, API keys, authorization values, and card fields are masked before persistence and export unless the user explicitly enables unmasked display.
+
+## CLI usage
+
+Running without a subcommand enumerates schemas:
 
 ```bash
 sqliblind
@@ -216,97 +303,52 @@ Use another authorized target:
 sqliblind --url "https://lab.example/fetch" --parameter id schemas
 ```
 
-The legacy entry point remains available for compatibility:
+### Bounded rows from CLI
 
 ```bash
-python sqli_gallery.py
+sqliblind rows \
+  --schema level5 \
+  --table photos \
+  --max-rows 5 \
+  --max-data-columns 10 \
+  --max-value-length 128 \
+  --max-data-bytes 10000
 ```
 
-## Schema maps and graphs
-
-`map`, `graph`, and `schema-map` are aliases.
-
-### CLI tree
+Unmask sensitive-looking values only when explicitly required:
 
 ```bash
-sqliblind --workers 6 map
+sqliblind rows \
+  --schema level5 \
+  --table photos \
+  --show-sensitive-values
 ```
 
-Example:
+### Schema maps and exports
 
-```text
-DATABASE STRUCTURE
-└── [SCHEMA] level5
-    └── [TABLE] photos
-        ├── [COLUMN] id
-        └── [COLUMN] filename
-
-SUMMARY
-Schemas: 1
-Tables: 1
-Columns: 2
-Relationships: 3
-```
-
-ASCII-only terminals:
+`map`, `graph`, and `schema-map` are aliases:
 
 ```bash
+sqliblind map
 sqliblind map --ascii
-```
-
-### TXT reports
-
-```bash
-sqliblind map --format tree --output reports/schema-map.txt
-sqliblind map --format relations --output reports/relations.txt
-```
-
-When the path has no extension, `.txt` is added automatically.
-
-### Mermaid
-
-```bash
+sqliblind map --format relations
 sqliblind map --format mermaid --output reports/schema-map.mmd
-```
-
-### Interactive HTML
-
-```bash
 sqliblind map --format html --output reports/schema-map.html
-```
-
-Without `--output`, the generated file is:
-
-```text
-imr-sqliblind-schema-map.html
-```
-
-The HTML report is self-contained and includes counters, expandable nodes, filtering, expand/collapse controls, responsive layout, escaped identifiers, and a restrictive Content Security Policy. It does not load external scripts, fonts, styles, images, or CDNs.
-
-Custom title:
-
-```bash
-sqliblind map --format html --title "Authorized lab schema map"
-```
-
-### JSON
-
-```bash
-sqliblind --json map
 sqliblind --json map --output reports/schema-map.json
 ```
 
-### Faster partial map
-
-Stop after schemas and tables:
+Include bounded row values only for explicit tables:
 
 ```bash
-sqliblind map --no-columns
+sqliblind map \
+  --include-data \
+  --data-table level5.photos \
+  --max-rows 5 \
+  --format html \
+  --output reports/full-map.html
 ```
 
-## Safe concurrency
-
-`--workers` controls independent extraction jobs. Character inference remains sequential, while independent names and metadata counts are processed concurrently.
+### Safe concurrency
 
 ```bash
 sqliblind --workers 8 --delay 0.1 --max-requests 5000 map
@@ -316,44 +358,28 @@ Safety characteristics:
 
 - `1 <= workers <= 16`.
 - One active thread pool per extraction phase.
-- Shared global request delay and request limit.
+- Shared global delay and request budget.
 - One `requests.Session` per worker thread.
-- Deterministic result ordering.
-- Pending-work cancellation after worker failure.
+- Deterministic output ordering.
+- Cooperative pause, resume, and cancellation checkpoints.
+- Pending future cancellation after failures.
+- TLS validation enabled unless `--insecure` is explicitly supplied.
 - Redirects are not followed.
-- TLS verification is enabled unless `--insecure` is explicitly passed.
 
-## Oracle modes
-
-Status code, default:
+### Oracle modes
 
 ```bash
 sqliblind --oracle status --true-status 200 schemas
-```
-
-Body marker:
-
-```bash
 sqliblind --oracle marker --true-marker "RESULT=TRUE" schemas
-```
-
-Regular expression:
-
-```bash
 sqliblind --oracle regex --true-regex "Welcome\s+back" schemas
-```
-
-Response length:
-
-```bash
 sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 ```
 
-## Headers, cookies, proxy, and TLS
+### Headers, cookies, proxy, and TLS
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.4.0" \
+  --header "User-Agent:imr-sqliblind/0.5.0" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
@@ -361,59 +387,27 @@ sqliblind \
 
 Use `--insecure` only in a controlled laboratory with a known self-signed certificate.
 
-## URL template mode
+## Development and validation
+
+Install all development and web dependencies:
 
 ```bash
-sqliblind \
-  --url-template "https://lab.example/fetch?id={{PAYLOAD}}" \
-  schemas
+python -m pip install -e ".[dev,web]"
 ```
 
-`[TO_REPLACE]` is also supported.
-
-## Default limits
-
-```text
---workers 4
---delay 0.1
---max-requests 5000
---max-items 128
---max-length 128
---min-char-code 32
---max-char-code 126
-```
-
-## Help
-
-```bash
-sqliblind --help
-sqliblind schemas --help
-sqliblind tables --help
-sqliblind columns --help
-sqliblind extract --help
-sqliblind probe --help
-sqliblind map --help
-```
-
-## Tests
+Run the complete suite:
 
 ```bash
 python -m unittest discover -s tests -v
 pytest -q
+python -m compileall -q src sqli_gallery.py sqliblind.py tests
 bash -n install.sh uninstall.sh
-```
-
-Optional quality checks:
-
-```bash
-python -m pip install -e ".[dev]"
 ruff check .
-mypy src/blind_sqli
-bandit -r src
+bandit -q -r src
 ```
 
-GitHub Actions tests Python 3.10, 3.11, 3.12, and 3.13. Dedicated Linux and Windows jobs perform native-installer smoke tests with temporary prefixes.
+The CI matrix covers Python 3.10, 3.11, 3.12, and 3.13, native Linux/Windows installer smoke tests, web API tests, packaged UI resources, and JavaScript syntax validation.
 
 ## Scope
 
-Metadata enumeration includes schemas, tables, and columns. Arbitrary scalar expressions can be extracted with `extract`. Automated bulk row dumping is intentionally excluded. Keep all testing minimal and within the authorized scope.
+Metadata enumeration includes schemas, tables, and columns. Row and cell extraction is explicit, bounded, and disabled by default. Automated unlimited database dumping is not included. Keep all testing minimal and within the authorized scope.

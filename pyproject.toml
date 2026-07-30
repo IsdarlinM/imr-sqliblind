@@ -37,7 +37,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-blind_sqli = ["webui/*.html"]
+blind_sqli = ["webui/*.html", "webui/*.css", "webui/*.js"]
 
 [tool.ruff]
 line-length = 100

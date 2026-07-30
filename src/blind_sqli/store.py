@@ -74,6 +74,24 @@ class SessionStore:
                 PRIMARY KEY(scan_id, id),
                 FOREIGN KEY(scan_id) REFERENCES scans(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS activities (
+                scan_id TEXT NOT NULL,
+                id TEXT NOT NULL,
+                operation TEXT NOT NULL,
+                target TEXT NOT NULL,
+                detail TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                worker TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                PRIMARY KEY(scan_id, id),
+                FOREIGN KEY(scan_id) REFERENCES scans(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_activities_scan_status
+                ON activities(scan_id, status, updated_at);
             """
         )
         self._connection.commit()
@@ -157,6 +175,9 @@ class SessionStore:
             relationship = payload.get("relationship")
             if isinstance(relationship, dict):
                 self._upsert_relationship(event, relationship)
+            activity = payload.get("activity")
+            if isinstance(activity, dict):
+                self._upsert_activity(event, activity)
             self._connection.execute(
                 "UPDATE scans SET updated_at=? WHERE id=?",
                 (event.timestamp, event.scan_id),
@@ -214,6 +235,49 @@ class SessionStore:
                 str(relationship["target_id"]),
                 str(relationship["kind"]),
                 event.timestamp,
+            ),
+        )
+
+    def _upsert_activity(self, event: ScanEvent, activity: dict[str, Any]) -> None:
+        required = {"id", "operation", "target", "status", "worker"}
+        if not required.issubset(activity):
+            return
+        status = str(activity["status"])
+        completed_at = (
+            event.timestamp
+            if status in {"completed", "failed", "cancelled"}
+            else None
+        )
+        self._connection.execute(
+            """
+            INSERT INTO activities(
+                scan_id,id,operation,target,detail,kind,status,worker,data_json,
+                started_at,updated_at,completed_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(scan_id,id) DO UPDATE SET
+                operation=excluded.operation,
+                target=excluded.target,
+                detail=excluded.detail,
+                kind=excluded.kind,
+                status=excluded.status,
+                worker=excluded.worker,
+                data_json=excluded.data_json,
+                updated_at=excluded.updated_at,
+                completed_at=COALESCE(excluded.completed_at,activities.completed_at)
+            """,
+            (
+                event.scan_id,
+                str(activity["id"]),
+                str(activity["operation"]),
+                str(activity["target"]),
+                str(activity.get("detail", "")),
+                str(activity.get("kind", "extraction")),
+                status,
+                str(activity["worker"]),
+                self._dumps(activity),
+                event.timestamp,
+                event.timestamp,
+                completed_at,
             ),
         )
 
@@ -283,6 +347,35 @@ class SessionStore:
             for row in rows
         ]
 
+    def get_activities(self, scan_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                """
+                SELECT id,operation,target,detail,kind,status,worker,data_json,
+                       started_at,updated_at,completed_at
+                FROM activities WHERE scan_id=?
+                ORDER BY CASE status WHEN 'running' THEN 0 ELSE 1 END,
+                         updated_at DESC LIMIT ?
+                """,
+                (scan_id, limit),
+            ).fetchall()
+        return [
+            {
+                **self._loads(row["data_json"]),
+                "id": row["id"],
+                "operation": row["operation"],
+                "target": row["target"],
+                "detail": row["detail"],
+                "kind": row["kind"],
+                "status": row["status"],
+                "worker": row["worker"],
+                "started_at": row["started_at"],
+                "updated_at": row["updated_at"],
+                "completed_at": row["completed_at"],
+            }
+            for row in rows
+        ]
+
     def snapshot(self, scan_id: str) -> dict[str, Any] | None:
         scan = self.get_scan(scan_id)
         if scan is None:
@@ -327,6 +420,7 @@ class SessionStore:
             "scan": scan,
             "entities": entities,
             "relationships": relationships,
+            "activities": self.get_activities(scan_id),
             "counts": counts,
         }
 
