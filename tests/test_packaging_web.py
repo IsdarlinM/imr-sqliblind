@@ -14,32 +14,46 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PackagingTests(unittest.TestCase):
     def test_metadata_resources_and_documentation(self) -> None:
-        metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(metadata["project"]["version"], "0.6.4")
+        metadata = tomllib.loads(
+            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(metadata["project"]["version"], "0.7.0")
         self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
         self.assertIn("web", metadata["project"]["optional-dependencies"])
-        package_data = metadata["tool"]["setuptools"]["package-data"]["blind_sqli"]
+        package_data = metadata["tool"]["setuptools"]["package-data"][
+            "blind_sqli"
+        ]
         self.assertIn("webui/*.html", package_data)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn("git clone https://github.com/IsdarlinM/imr-sqliblind.git", readme)
+        self.assertIn(
+            "git clone https://github.com/IsdarlinM/imr-sqliblind.git",
+            readme,
+        )
         self.assertIn("sqliblind update --check", readme)
         self.assertIn("safe.directory", readme)
         self.assertIn("Remote HTTP access", readme)
         self.assertIn("Interactive graph", readme)
+        self.assertIn("Optimized exact inference", readme)
+        self.assertIn("sqliblind --inference-mode adaptive", readme)
         self.assertIn("sqliblind --progress live map", readme)
         self.assertIn("sqliblind web", readme)
 
     def test_scripts_and_javascript_are_valid(self) -> None:
-        subprocess.run(
-            ["bash", "-n", str(ROOT / "install.sh"), str(ROOT / "uninstall.sh")],
-            check=True,
-        )
+        scripts = [ROOT / "install.sh", ROOT / "uninstall.sh"]
+        if all(script.exists() for script in scripts):
+            subprocess.run(
+                ["bash", "-n", *(str(script) for script in scripts)],
+                check=True,
+            )
         javascript = ROOT / "src/blind_sqli/webui/app.js"
         subprocess.run(["node", "--check", str(javascript)], check=True)
-        self.assertNotIn(
-            "https://",
-            (ROOT / "src/blind_sqli/webui/index.html").read_text(encoding="utf-8"),
+        html = (ROOT / "src/blind_sqli/webui/index.html").read_text(
+            encoding="utf-8"
         )
+        self.assertNotIn('src="http://', html)
+        self.assertNotIn('src="https://', html)
+        self.assertNotIn('href="http://', html)
+        self.assertNotIn('href="https://', html)
 
 
 if __name__ == "__main__":
