@@ -15,13 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 class PackagingTests(unittest.TestCase):
     def test_metadata_resources_and_documentation(self) -> None:
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(metadata["project"]["version"], "0.5.1")
+        self.assertEqual(metadata["project"]["version"], "0.6.0")
         self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
         self.assertIn("web", metadata["project"]["optional-dependencies"])
         package_data = metadata["tool"]["setuptools"]["package-data"]["blind_sqli"]
         self.assertIn("webui/*.html", package_data)
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         self.assertIn("git clone https://github.com/IsdarlinM/imr-sqliblind.git", readme)
+        self.assertIn("sqliblind update --check", readme)
         self.assertIn("sqliblind --progress live map", readme)
         self.assertIn("sqliblind web", readme)
 
