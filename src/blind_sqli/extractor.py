@@ -19,6 +19,8 @@ from .models import ExtractionJob, ProbeResult, Table
 T = TypeVar("T")
 R = TypeVar("R")
 
+_CHARACTER_INFERENCE_ATTEMPTS = 3
+
 
 def _job_activity(job: object) -> tuple[str, str]:
     if isinstance(job, ExtractionJob):
@@ -176,6 +178,116 @@ class BlindExtractor(CoreBlindExtractor):
         )
         return value, truncated
 
+    def _stable_condition(
+        self,
+        condition: str,
+        *,
+        initial: ProbeResult | None = None,
+    ) -> tuple[bool, list[ProbeResult]]:
+        """Return a two-of-three decision, using at least two independent probes."""
+
+        samples = [initial] if initial is not None else []
+        while len(samples) < 2:
+            samples.append(self.probe_condition(condition))
+        if samples[0].matched == samples[1].matched:
+            return samples[0].matched, samples
+        samples.append(self.probe_condition(condition))
+        matched = sum(1 for sample in samples if sample.matched) >= 2
+        return matched, samples
+
+    @staticmethod
+    def _sample_summary(samples: Sequence[ProbeResult]) -> list[dict[str, object]]:
+        return [
+            {
+                "matched": sample.matched,
+                "status_code": sample.status_code,
+                "body_length": sample.body_length,
+            }
+            for sample in samples
+        ]
+
+    def _infer_character_code(self, code_expression: str, position: int) -> int:
+        candidates: list[int] = []
+        confirmations: list[list[dict[str, object]]] = []
+        for attempt in range(1, _CHARACTER_INFERENCE_ATTEMPTS + 1):
+            self.control.checkpoint()
+            low = self.config.min_char_code
+            high = self.config.max_char_code
+
+            below_condition = f"({code_expression}) < {low}"
+            below_initial = self.probe_condition(below_condition)
+            if below_initial.matched:
+                below, _ = self._stable_condition(
+                    below_condition,
+                    initial=below_initial,
+                )
+                if below:
+                    raise ExtractionError(
+                        f"Character at position {position} is below --min-char-code ({low})."
+                    )
+
+            above_condition = f"({code_expression}) > {high}"
+            above_initial = self.probe_condition(above_condition)
+            if above_initial.matched:
+                above, _ = self._stable_condition(
+                    above_condition,
+                    initial=above_initial,
+                )
+                if above:
+                    raise ExtractionError(
+                        f"Character at position {position} exceeds --max-char-code ({high})."
+                    )
+
+            while low < high:
+                midpoint = (low + high) // 2
+                if self.probe_condition(f"({code_expression}) > {midpoint}").matched:
+                    low = midpoint + 1
+                else:
+                    high = midpoint
+
+            candidate = low
+            candidates.append(candidate)
+            confirmed, samples = self._stable_condition(
+                f"({code_expression}) = {candidate}"
+            )
+            sample_summary = self._sample_summary(samples)
+            confirmations.append(sample_summary)
+            if confirmed:
+                if attempt > 1:
+                    self._emit(
+                        "inference.recovered",
+                        position=position,
+                        attempt=attempt,
+                        candidate=candidate,
+                        candidates=candidates,
+                        confirmation_samples=sample_summary,
+                    )
+                return candidate
+
+            if attempt < _CHARACTER_INFERENCE_ATTEMPTS:
+                self._activity_update(
+                    "character confirmation was inconsistent; "
+                    f"restarting inference {attempt + 1}/{_CHARACTER_INFERENCE_ATTEMPTS}",
+                    force=True,
+                    position=position,
+                    candidate=candidate,
+                    attempt=attempt,
+                )
+                self._emit(
+                    "inference.retry",
+                    position=position,
+                    attempt=attempt,
+                    candidate=candidate,
+                    candidates=list(candidates),
+                    confirmation_samples=sample_summary,
+                )
+
+        raise ExtractionError(
+            f"Unable to confirm character at position {position} after "
+            f"{_CHARACTER_INFERENCE_ATTEMPTS} complete inference attempts. "
+            f"Candidates={candidates}; confirmations={confirmations}."
+        )
+
     def extract_string(self, expression: str, *, maximum_length: int | None = None) -> str:
         created = self._current() is None
         context = (
@@ -202,27 +314,8 @@ class BlindExtractor(CoreBlindExtractor):
                     unit="characters",
                 )
                 code_expression = self.dialect.char_code_expression(expression, position)
-                low = self.config.min_char_code
-                high = self.config.max_char_code
-                if self.probe_condition(f"({code_expression}) < {low}").matched:
-                    raise ExtractionError(
-                        f"Character at position {position} is below --min-char-code ({low})."
-                    )
-                if self.probe_condition(f"({code_expression}) > {high}").matched:
-                    raise ExtractionError(
-                        f"Character at position {position} exceeds --max-char-code ({high})."
-                    )
-                while low < high:
-                    midpoint = (low + high) // 2
-                    if self.probe_condition(f"({code_expression}) > {midpoint}").matched:
-                        low = midpoint + 1
-                    else:
-                        high = midpoint
-                if not self.probe_condition(f"({code_expression}) = {low}").matched:
-                    raise ExtractionError(
-                        f"Unable to confirm character at position {position}."
-                    )
-                characters.append(chr(low))
+                code = self._infer_character_code(code_expression, position)
+                characters.append(chr(code))
             value = "".join(characters) + ("…" if truncated else "")
             visible = len(characters)
             suffix = " (truncated)" if truncated else ""
