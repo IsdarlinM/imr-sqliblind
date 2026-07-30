@@ -17,6 +17,7 @@ from .oracle import ResponseOracle
 T = TypeVar("T")
 R = TypeVar("R")
 
+MAX_WORKERS = 64
 
 _SENSITIVE_COLUMN_PARTS = {
     "password",
@@ -67,8 +68,8 @@ class ExtractorConfig:
     max_char_code: int = 126
 
     def __post_init__(self) -> None:
-        if not 1 <= self.workers <= 16:
-            raise ValueError("workers must be between 1 and 16")
+        if not 1 <= self.workers <= MAX_WORKERS:
+            raise ValueError(f"workers must be between 1 and {MAX_WORKERS}")
         if self.max_length < 1:
             raise ValueError("max_length must be at least 1")
         if self.max_items < 1:
@@ -204,10 +205,16 @@ class BlindExtractor:
                 high = midpoint
         return low, False
 
-    def extract_string(self, expression: str, *, maximum_length: int | None = None) -> str:
+    def extract_string(
+        self,
+        expression: str,
+        *,
+        maximum_length: int | None = None,
+    ) -> str:
         limit = maximum_length or self.config.max_length
         length, truncated = self.infer_integer_capped(
-            self.dialect.length_expression(expression), limit
+            self.dialect.length_expression(expression),
+            limit,
         )
         characters: list[str] = []
         for position in range(1, length + 1):
@@ -218,16 +225,14 @@ class BlindExtractor:
             if self.probe_condition(f"({code_expression}) < {low}").matched:
                 raise ExtractionError(
                     f"Character at position {position} is below --min-char-code ({low})."
-                    )
+                )
             if self.probe_condition(f"({code_expression}) > {high}").matched:
                 raise ExtractionError(
                     f"Character at position {position} exceeds --max-char-code ({high})."
                 )
             while low < high:
                 midpoint = (low + high) // 2
-                if self.probe_condition(
-                    f"({code_expression}) > {midpoint}"
-                ).matched:
+                if self.probe_condition(f"({code_expression}) > {midpoint}").matched:
                     low = midpoint + 1
                 else:
                     high = midpoint
@@ -250,7 +255,8 @@ class BlindExtractor:
         workers = min(self.config.workers, len(items))
         values: list[R | None] = [None] * len(items)
         with ThreadPoolExecutor(
-            max_workers=workers, thread_name_prefix="sqliblind"
+            max_workers=workers,
+            thread_name_prefix="sqliblind",
         ) as executor:
             futures: dict[Future[R], tuple[int, T]] = {
                 executor.submit(function, item): (index, item)
@@ -280,19 +286,24 @@ class BlindExtractor:
             function = lambda job: self.extract_string(job.expression)
         else:
             function = lambda job: self.extract_string(
-                job.expression, maximum_length=maximum_length
+                job.expression,
+                maximum_length=maximum_length,
             )
         values = self._parallel_map(
             jobs,
             function,
             on_result=on_result,
         )
-        return {job.key: value for job, value in zip(jobs, values, strict=True)}
+        return {
+            job.key: value
+            for job, value in zip(jobs, values, strict=True)
+        }
 
     def enumerate_schemas(self) -> list[str]:
         self._emit("phase.started", phase="schemas")
         count = self.infer_integer(
-            self.dialect.schema_count_expression(), self.config.max_items
+            self.dialect.schema_count_expression(),
+            self.config.max_items,
         )
         jobs = [
             ExtractionJob(str(index), self.dialect.schema_name_expression(index))
@@ -301,7 +312,10 @@ class BlindExtractor:
         values = self.extract_many(
             jobs,
             on_result=lambda _job, name: self._emit_entity(
-                kind="schema", name=name, entity_key=(name,), data={"schema": name}
+                kind="schema",
+                name=name,
+                entity_key=(name,),
+                data={"schema": name},
             ),
         )
         self._emit("phase.completed", phase="schemas", count=len(values))
@@ -310,11 +324,13 @@ class BlindExtractor:
     def enumerate_tables(self, schema: str) -> list[str]:
         schema_identifier = entity_id("schema", schema)
         count = self.infer_integer(
-            self.dialect.table_count_expression(schema), self.config.max_items
+            self.dialect.table_count_expression(schema),
+            self.config.max_items,
         )
         jobs = [
             ExtractionJob(
-                str(index), self.dialect.table_name_expression(schema, index)
+                str(index),
+                self.dialect.table_name_expression(schema, index),
             )
             for index in range(count)
         ]
@@ -333,7 +349,8 @@ class BlindExtractor:
     def enumerate_columns(self, schema: str, table: str) -> list[str]:
         table_identifier = entity_id("table", schema, table)
         count = self.infer_integer(
-            self.dialect.column_count_expression(schema, table), self.config.max_items
+            self.dialect.column_count_expression(schema, table),
+            self.config.max_items,
         )
         jobs = [
             ExtractionJob(
@@ -349,7 +366,11 @@ class BlindExtractor:
                 name=name,
                 entity_key=(schema, table, name),
                 parent_id=table_identifier,
-                data={"schema": schema, "table": table, "column": name},
+                data={
+                    "schema": schema,
+                    "table": table,
+                    "column": name,
+                },
             ),
         )
         return list(values.values())
@@ -369,7 +390,8 @@ class BlindExtractor:
             return 0, False, 0
         selected_columns = table.columns[:max_columns]
         count, truncated = self.infer_integer_capped(
-            self.dialect.row_count_expression(schema, table.name), max_rows
+            self.dialect.row_count_expression(schema, table.name),
+            max_rows,
         )
         bytes_used = 0
         table_identifier = entity_id("table", schema, table.name)
@@ -403,7 +425,8 @@ class BlindExtractor:
                     selected_columns[0],
                 )
                 value = self.extract_string(
-                    expression, maximum_length=min(max_value_length, remaining)
+                    expression,
+                    maximum_length=min(max_value_length, remaining),
                 )
                 encoded = value.encode("utf-8")
                 if len(encoded) > remaining:
@@ -416,7 +439,9 @@ class BlindExtractor:
                     row_truncated = True
                 bytes_used += len(encoded)
                 display_value = protect_sensitive_value(
-                    column, value, reveal=reveal_sensitive_values
+                    column,
+                    value,
+                    reveal=reveal_sensitive_values,
                 )
                 row_values[column] = display_value
                 self._emit_entity(
@@ -484,10 +509,12 @@ class BlindExtractor:
 
         schema_names = self.enumerate_schemas()
         database = DatabaseMap([Schema(name) for name in schema_names])
+
         table_counts = self._parallel_map(
             schema_names,
             lambda schema: self.infer_integer(
-                self.dialect.table_count_expression(schema), self.config.max_items
+                self.dialect.table_count_expression(schema),
+                self.config.max_items,
             ),
         )
 
@@ -500,18 +527,25 @@ class BlindExtractor:
                 table_jobs.append(
                     ExtractionJob(
                         f"s{schema_index}:t{table_index}",
-                        self.dialect.table_name_expression(schema_name, table_index),
+                        self.dialect.table_name_expression(
+                            schema_name,
+                            table_index,
+                        ),
                     )
                 )
                 table_locations.append((schema_index, table_index))
 
         table_location_by_key = {
             job.key: location
-            for job, location in zip(table_jobs, table_locations, strict=True)
+            for job, location in zip(
+                table_jobs,
+                table_locations,
+                strict=True,
+            )
         }
 
         def on_table(job: ExtractionJob, table_name: str) -> None:
-            location = table_location_by_key[ob.key]
+            location = table_location_by_key[job.key]
             schema_name = schema_names[location[0]]
             self._emit_entity(
                 kind="table",
@@ -522,10 +556,15 @@ class BlindExtractor:
             )
 
         table_names = list(
-            self.extract_many(table_jobs, on_result=on_table).values()
+            self.extract_many(
+                table_jobs,
+                on_result=on_table,
+            ).values()
         )
         for (schema_index, _), table_name in zip(
-            table_locations, table_names, strict=True
+            table_locations,
+            table_names,
+            strict=True,
         ):
             database.schemas[schema_index].add_table(Table(table_name))
 
@@ -536,7 +575,12 @@ class BlindExtractor:
         for schema_index, schema in enumerate(database.schemas):
             for table_index, table in enumerate(schema.tables):
                 table_references.append(
-                    (schema_index, table_index, schema.name, table.name)
+                    (
+                        schema_index,
+                        table_index,
+                        schema.name,
+                        table.name,
+                    )
                 )
 
         column_counts = self._parallel_map(
@@ -546,26 +590,42 @@ class BlindExtractor:
                 self.config.max_items,
             ),
         )
+
         column_jobs: list[ExtractionJob] = []
         column_locations: list[tuple[int, int, str, str]] = []
-        for reference, count in zip(table_references, column_counts, strict=True):
+        for reference, count in zip(
+            table_references,
+            column_counts,
+            strict=True,
+        ):
             schema_index, table_index, schema_name, table_name = reference
             for column_index in range(count):
                 column_jobs.append(
                     ExtractionJob(
                         f"s{schema_index}:t{table_index}:c{column_index}",
                         self.dialect.column_name_expression(
-                            schema_name, table_name, column_index
+                            schema_name,
+                            table_name,
+                            column_index,
                         ),
                     )
                 )
                 column_locations.append(
-                    (schema_index, table_index, schema_name, table_name)
+                    (
+                        schema_index,
+                        table_index,
+                        schema_name,
+                        table_name,
+                    )
                 )
 
         column_location_by_key = {
             job.key: location
-            for job, location in zip(column_jobs, column_locations, strict=True)
+            for job, location in zip(
+                column_jobs,
+                column_locations,
+                strict=True,
+            )
         }
 
         def on_column(job: ExtractionJob, column_name: str) -> None:
@@ -584,16 +644,27 @@ class BlindExtractor:
             )
 
         column_names = list(
-            self.extract_many(column_jobs, on_result=on_column).values()
+            self.extract_many(
+                column_jobs,
+                on_result=on_column,
+            ).values()
         )
         for (schema_index, table_index, _, _), column_name in zip(
-            column_locations, column_names, strict=True
+            column_locations,
+            column_names,
+            strict=True,
         ):
-            database.schemas[schema_index].tables[table_index].add_column(column_name)
+            database.schemas[schema_index].tables[table_index].add_column(
+                column_name
+            )
 
         if not include_data:
             return database
-        selectors = {value.casefold() for value in (data_tables or set())}
+
+        selectors = {
+            value.casefold()
+            for value in (data_tables or set())
+        }
         remaining_bytes = max_data_bytes
         for schema in database.schemas:
             for table in schema.tables:
@@ -617,3 +688,13 @@ class BlindExtractor:
     @property
     def elapsed_seconds(self) -> float:
         return time.monotonic() - self._started
+
+
+__all__ = [
+    "BlindExtractor",
+    "CalibrationError",
+    "ExtractionError",
+    "ExtractorConfig",
+    "MAX_WORKERS",
+    "protect_sensitive_value",
+]
