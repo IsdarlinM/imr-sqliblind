@@ -2,7 +2,7 @@
 
 ```text
 imr-sqliblind
-imr :: v0.6.2
+imr :: v0.6.3
 ```
 
 `imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
@@ -26,10 +26,11 @@ The installed command is `sqliblind`. It provides a CLI, a realtime web console,
 - Schemas, tables, columns, bounded rows, and cells.
 - CLI activity monitor without misleading percentages.
 - Realtime FastAPI/Uvicorn web console using SSE.
+- Authenticated remote HTTP access with optional TLS.
 - SQLite session history, pause, resume, stop, filters, and exports.
 - Unicode/ASCII trees, relations, Mermaid, JSON, and HTML reports.
 - Sensitive-looking values masked by default.
-- TLS validation enabled and redirects disabled by default.
+- TLS validation enabled and redirects disabled by default for target requests.
 - Native user-level installers for POSIX systems and Windows.
 - `sqliblind update` for checking and installing official updates.
 
@@ -199,7 +200,22 @@ sqliblind web --workspace "$HOME/sqliblind-workspaces"
 sqliblind web --no-open-browser
 ```
 
-Remote binding requires explicit authorization, token authentication, and TLS:
+### Remote HTTP access
+
+Remote HTTP access requires an explicit non-loopback opt-in and a token, but it does not require a TLS certificate:
+
+```bash
+sqliblind web \
+  --host 0.0.0.0 \
+  --allow-remote \
+  --token "a-long-random-token"
+```
+
+The console starts at `http://HOST:8088`. A warning is printed because the token, session metadata, and scan results are not encrypted in transit. Use this mode only on a trusted local network.
+
+### Optional remote HTTPS
+
+TLS remains available by supplying both certificate files:
 
 ```bash
 sqliblind web \
@@ -209,6 +225,8 @@ sqliblind web \
   --ssl-certfile server.crt \
   --ssl-keyfile server.key
 ```
+
+Certificate and key options must be used together. When TLS is enabled, the console uses HTTPS and secure cookies.
 
 The browser displays current activities, schemas, tables, columns, rows, cells, relationships, a live SVG graph, raw events, session history, and a right-side details drawer.
 
@@ -266,7 +284,7 @@ sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.6.2" \
+  --header "User-Agent:imr-sqliblind/0.6.3" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
