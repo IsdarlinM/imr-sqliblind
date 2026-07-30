@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import unittest
 
+from blind_sqli.cli import build_parser
 from blind_sqli.extractor_core import BlindExtractor, ExtractorConfig
-from blind_sqli.models import DatabaseMap, ExtractionJob, Schema, Table
+from blind_sqli.models import DatabaseMap, ExtractionJob
 
 
 class FakeDialect:
@@ -85,6 +86,11 @@ class MapCallbackAndWorkerLimitTests(unittest.TestCase):
             extractor.emitted_tables,
             [("main", "table_0"), ("main", "table_1")],
         )
+
+    def test_cli_accepts_64_workers_for_map(self) -> None:
+        args = build_parser().parse_args(["--workers", "64", "map"])
+        self.assertEqual(args.workers, 64)
+        self.assertEqual(args.command, "map")
 
     def test_64_workers_are_allowed(self) -> None:
         self.assertEqual(ExtractorConfig(workers=64).workers, 64)
