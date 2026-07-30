@@ -1,22 +1,63 @@
 # Updating imr-sqliblind
 
-`imr-sqliblind` does not currently provide a `sqliblind update` subcommand.
-Update the source checkout from GitHub and rerun the native installer. The installer refreshes the isolated environment and the global `sqliblind` wrapper.
+Version 0.6.0 adds a native update command for Linux, Termux, and Windows.
 
-## Linux and Termux
-
-Run these commands from the cloned repository:
+## Check for updates
 
 ```bash
-git checkout main
-git pull --ff-only origin main
-chmod +x install.sh
-./install.sh
-hash -r
-sqliblind --version
+sqliblind update --check
 ```
 
-Example when the repository is under Android shared storage:
+Example output:
+
+```text
+Installed version: 0.6.0
+Available version: 0.7.0
+Repository: https://github.com/IsdarlinM/imr-sqliblind.git
+Update available: 0.6.0 -> 0.7.0
+```
+
+Structured output:
+
+```bash
+sqliblind update --check --json
+```
+
+## Install the latest version
+
+```bash
+sqliblind update
+```
+
+The updater:
+
+1. Reads the available version from the official `main` branch over HTTPS.
+2. Uses only the official `IsdarlinM/imr-sqliblind` repository.
+3. Refuses an unexpected `origin` repository.
+4. Refuses to overwrite a checkout with local changes.
+5. Updates `main` using `git pull --ff-only`.
+6. Reinstalls the package and web dependencies into the current Python environment.
+7. Verifies the installed version after the update.
+
+If the original checkout is unavailable, the command creates a managed official checkout below the application directory and uses it for future updates.
+
+## Options
+
+```text
+sqliblind update --check          Check only; do not modify files
+sqliblind update                  Install an available update
+sqliblind update --force          Reinstall the latest available version
+sqliblind update --source PATH    Use an explicit official checkout
+sqliblind update --timeout 20     Change the GitHub request timeout
+sqliblind update --json           Print structured JSON output
+sqliblind update --help           Show updater help
+```
+
+## First update from 0.5.1
+
+Version 0.5.1 does not contain the new command. Update once manually:
+
+### Linux and Termux
 
 ```bash
 cd ~/storage/downloads/imr-sqliblind
@@ -28,63 +69,24 @@ hash -r
 sqliblind --version
 ```
 
-The expected current version is:
-
-```text
-sqliblind 0.5.1
-```
-
-If the shell still reports an older version, reload the profile and clear the command cache:
-
-```bash
-source ~/.profile 2>/dev/null || true
-hash -r
-command -v sqliblind
-sqliblind --version
-```
-
-## Windows CMD
-
-Run from the cloned repository:
+### Windows CMD
 
 ```cmd
+cd imr-sqliblind
 git checkout main
 git pull --ff-only origin main
 install.cmd
 ```
 
-Open a new CMD window and verify:
-
-```cmd
-where sqliblind
-sqliblind --version
-```
-
-## Fresh checkout
-
-If the original repository directory was deleted or is not a Git checkout, clone it again and run the installer:
-
-```bash
-git clone https://github.com/IsdarlinM/imr-sqliblind.git
-cd imr-sqliblind
-./install.sh
-```
-
-Windows:
-
-```cmd
-git clone https://github.com/IsdarlinM/imr-sqliblind.git
-cd imr-sqliblind
-install.cmd
-```
+After installing 0.6.0, future updates use `sqliblind update`.
 
 ## Local changes
 
-`git pull --ff-only` intentionally refuses updates that require a merge. Before updating, inspect any local modifications:
+The updater intentionally refuses a dirty checkout. Inspect changes with:
 
 ```bash
 git status
 git diff
 ```
 
-Commit, stash, or discard intentional local changes before repeating the update. Do not use `git reset --hard` unless you explicitly intend to delete those changes.
+Commit, stash, or discard intentional changes before retrying. The updater never runs `git reset --hard`.
