@@ -98,6 +98,19 @@ class WebUiFrontendTests(unittest.TestCase):
             re.compile(r"entity\.name\.slice\s*\("),
         )
 
+    def test_graph_uses_compact_circular_nodes(self) -> None:
+        self.assertIn('createSvg("circle"', self.javascript)
+        self.assertIn("compactGraphNodeDimensions", self.javascript)
+        self.assertIn("compactGraphEndpoint", self.javascript)
+        self.assertIn("horizontalGap: 176", self.javascript)
+        self.assertIn("verticalGap: 12", self.javascript)
+        self.assertIn("schema: 18", self.javascript)
+        self.assertIn("cell: 12", self.javascript)
+        self.assertIn("compactGraphLabel", self.javascript)
+        self.assertNotIn("width: Math.max(170", self.javascript.split(
+            "const COMPACT_GRAPH", maxsplit=1
+        )[1])
+
     def test_activity_snapshot_patch_is_integrated_in_main_javascript(self) -> None:
         self.assertIn("snapshot.activities || []", self.javascript)
         self.assertIn("started_at: startedAt", self.javascript)
