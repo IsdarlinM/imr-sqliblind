@@ -19,7 +19,7 @@ class BrandingTests(unittest.TestCase):
     def test_public_project_and_command_names(self) -> None:
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(metadata["project"]["name"], "imr-sqliblind")
-        self.assertEqual(metadata["project"]["version"], "0.6.2")
+        self.assertEqual(metadata["project"]["version"], "0.6.3")
         self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
         self.assertEqual(
             metadata["project"]["scripts"],
