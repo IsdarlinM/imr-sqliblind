@@ -56,7 +56,7 @@ def create_app(
         true_marker: str | None = Field(default=None, max_length=1024)
         true_regex: str | None = Field(default=None, max_length=1024)
         true_length: int | None = Field(default=None, ge=0)
-        length_tolerance: int = Field(default=0, ge=0, le=100000)
+        length_tolerance: int = Field(default=0, ge=0, le=100_000)
         timeout: float = Field(default=10.0, gt=0, le=120)
         retries: int = Field(default=1, ge=0, le=5)
         delay: float = Field(default=0.1, ge=0, le=60)
@@ -76,25 +76,35 @@ def create_app(
         max_rows: int = Field(default=5, ge=1, le=25)
         max_data_columns: int = Field(default=10, ge=1, le=20)
         max_value_length: int = Field(default=128, ge=1, le=512)
-        max_data_bytes: int = Field(default=10000, ge=1, le=50000)
+        max_data_bytes: int = Field(default=10_000, ge=1, le=50_000)
         reveal_sensitive_values: bool = False
+        inference_mode: str = "adaptive"
+        parallel_characters: bool = True
+        adaptive_confirmation: bool = True
+        adaptive_concurrency: bool = True
+        request_event_sample: int = Field(default=20, ge=1, le=1000)
 
     def authorized(request: Request) -> None:
         supplied = request.cookies.get(AUTH_COOKIE) or request.headers.get(
-            "X-SQLIBLIND-TOKEN", ""
+            "X-SQLIBLIND-TOKEN",
+            "",
         )
         if not supplied or not secrets.compare_digest(supplied, auth_token):
             raise HTTPException(status_code=401, detail="Authentication required")
 
-    def csrf_protected(request: Request, _: None = Depends(authorized)) -> None:
+    def csrf_protected(
+        request: Request,
+        _: None = Depends(authorized),
+    ) -> None:
         header = request.headers.get("X-SQLIBLIND-CSRF", "")
         cookie = request.cookies.get(CSRF_COOKIE, "")
-        if not (
+        valid = (
             header
             and cookie
             and secrets.compare_digest(header, csrf)
             and secrets.compare_digest(cookie, csrf)
-        ):
+        )
+        if not valid:
             raise HTTPException(status_code=403, detail="CSRF validation failed")
 
     @app.middleware("http")
@@ -121,7 +131,10 @@ def create_app(
         return response
 
     @app.get("/", response_class=HTMLResponse)
-    async def index(request: Request, token: str | None = Query(default=None)):
+    async def index(
+        request: Request,
+        token: str | None = Query(default=None),
+    ):
         if token is not None:
             if not secrets.compare_digest(token, auth_token):
                 raise HTTPException(status_code=401, detail="Invalid token")
@@ -182,14 +195,20 @@ def create_app(
     async def get_scan(scan_id: str) -> dict[str, Any]:
         return require_scan(scan_id)
 
-    @app.get("/api/scans/{scan_id}/snapshot", dependencies=[Depends(authorized)])
+    @app.get(
+        "/api/scans/{scan_id}/snapshot",
+        dependencies=[Depends(authorized)],
+    )
     async def snapshot(scan_id: str) -> dict[str, Any]:
         value = manager.store.snapshot(scan_id)
         if value is None:
             raise HTTPException(status_code=404, detail="Scan not found")
         return value
 
-    @app.get("/api/scans/{scan_id}/events", dependencies=[Depends(authorized)])
+    @app.get(
+        "/api/scans/{scan_id}/events",
+        dependencies=[Depends(authorized)],
+    )
     async def events(
         scan_id: str,
         after: int = Query(default=0, ge=0),
@@ -198,7 +217,10 @@ def create_app(
         require_scan(scan_id)
         return manager.store.get_events(scan_id, after=after, limit=limit)
 
-    @app.get("/api/scans/{scan_id}/stream", dependencies=[Depends(authorized)])
+    @app.get(
+        "/api/scans/{scan_id}/stream",
+        dependencies=[Depends(authorized)],
+    )
     async def stream(scan_id: str, after: int = Query(default=0, ge=0)):
         require_scan(scan_id)
 
@@ -211,17 +233,19 @@ def create_app(
                     idle = 0
                     for item in rows:
                         cursor = int(item["seq"])
-                        yield "data: " + json.dumps(
-                            item, ensure_ascii=False, separators=(",", ":")
-                        ) + "\n\n"
+                        payload = json.dumps(
+                            item,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        )
+                        yield f"data: {payload}\n\n"
                 else:
                     idle += 1
                     if idle % 40 == 0:
                         yield ": heartbeat\n\n"
                 scan = manager.store.get_scan(scan_id)
-                if scan is None or (
-                    scan["status"] in TERMINAL_STATUSES and not rows
-                ):
+                terminal = scan is None or scan["status"] in TERMINAL_STATUSES
+                if terminal and not rows:
                     break
                 await asyncio.sleep(0.25)
 
@@ -236,23 +260,36 @@ def create_app(
             getattr(manager, name)(scan_id)
         except KeyError as exc:
             raise HTTPException(
-                status_code=409, detail="Scan is not active in this process"
+                status_code=409,
+                detail="Scan is not active in this process",
             ) from exc
         return JSONResponse({"status": name})
 
-    @app.post("/api/scans/{scan_id}/pause", dependencies=[Depends(csrf_protected)])
+    @app.post(
+        "/api/scans/{scan_id}/pause",
+        dependencies=[Depends(csrf_protected)],
+    )
     async def pause(scan_id: str):
         return control("pause", scan_id)
 
-    @app.post("/api/scans/{scan_id}/resume", dependencies=[Depends(csrf_protected)])
+    @app.post(
+        "/api/scans/{scan_id}/resume",
+        dependencies=[Depends(csrf_protected)],
+    )
     async def resume(scan_id: str):
         return control("resume", scan_id)
 
-    @app.post("/api/scans/{scan_id}/stop", dependencies=[Depends(csrf_protected)])
+    @app.post(
+        "/api/scans/{scan_id}/stop",
+        dependencies=[Depends(csrf_protected)],
+    )
     async def stop(scan_id: str):
         return control("stop", scan_id)
 
-    @app.get("/api/scans/{scan_id}/export", dependencies=[Depends(authorized)])
+    @app.get(
+        "/api/scans/{scan_id}/export",
+        dependencies=[Depends(authorized)],
+    )
     async def export_scan(scan_id: str, format: str = "json"):
         try:
             content, media_type = manager.export(scan_id, format)
@@ -261,7 +298,8 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         suffix = {"json": "json", "html": "html", "mermaid": "mmd"}.get(
-            format, "txt"
+            format,
+            "txt",
         )
         return Response(
             content,

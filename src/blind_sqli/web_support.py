@@ -49,7 +49,7 @@ def load_ui(csrf_token: str, nonce: str) -> str:
 
 
 def load_asset(name: str) -> str:
-    if name not in {"app.css", "app.js"}:
+    if name not in {"app.css", "app.js", "inference-options.js"}:
         raise ValueError("unsupported web asset")
     return (
         resources.files("blind_sqli")

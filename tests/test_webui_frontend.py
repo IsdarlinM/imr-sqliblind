@@ -5,7 +5,6 @@ import unittest
 from html.parser import HTMLParser
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 WEBUI = ROOT / "src" / "blind_sqli" / "webui"
 
@@ -14,6 +13,7 @@ class _DocumentInspector(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
         self.ids: set[str] = set()
+        self.names: set[str] = set()
         self.scripts: list[dict[str, str | None]] = []
 
     def handle_starttag(
@@ -25,6 +25,9 @@ class _DocumentInspector(HTMLParser):
         identifier = values.get("id")
         if identifier:
             self.ids.add(identifier)
+        name = values.get("name")
+        if name:
+            self.names.add(name)
         if tag == "script":
             self.scripts.append(values)
 
@@ -34,7 +37,10 @@ class WebUiFrontendTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.html = (WEBUI / "index.html").read_text(encoding="utf-8")
         cls.css = (WEBUI / "app.css").read_text(encoding="utf-8")
-        cls.javascript = (WEBUI / "app.js").read_text(encoding="utf-8")
+        cls.javascript = "\n".join(
+            (WEBUI / name).read_text(encoding="utf-8")
+            for name in ("app.js", "inference-options.js")
+        )
 
     def test_responsive_layout_has_required_controls(self) -> None:
         inspector = _DocumentInspector()
@@ -49,10 +55,18 @@ class WebUiFrontendTests(unittest.TestCase):
             "drawerBackdrop",
             "filter",
         }
+        inference_names = {
+            "inference_mode",
+            "parallel_characters",
+            "adaptive_confirmation",
+            "adaptive_concurrency",
+            "request_event_sample",
+        }
         self.assertTrue(expected.issubset(inspector.ids))
+        self.assertTrue(inference_names.issubset(inspector.names))
         self.assertEqual(
             [script.get("src") for script in inspector.scripts],
-            ["/assets/app.js"],
+            ["/assets/app.js", "/assets/inference-options.js"],
         )
 
     def test_css_prevents_common_overflow_and_mobile_deformation(self) -> None:
@@ -88,6 +102,14 @@ class WebUiFrontendTests(unittest.TestCase):
         self.assertIn("snapshot.activities || []", self.javascript)
         self.assertIn("started_at: startedAt", self.javascript)
         self.assertNotIn("const selectScanBase=selectScan", self.html)
+
+    def test_special_characters_are_documented_as_numeric_codes(self) -> None:
+        self.assertIn("Percent (37) and underscore (95)", self.html)
+        self.assertIn(
+            'inference_mode: String(data.get("inference_mode")',
+            self.javascript,
+        )
+        self.assertNotIn("LIKE pattern for inference", self.javascript)
 
 
 if __name__ == "__main__":
