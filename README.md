@@ -2,7 +2,7 @@
 
 ```text
 imr-sqliblind
-imr :: v0.6.1
+imr :: v0.6.2
 ```
 
 `imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
@@ -12,10 +12,9 @@ The installed command is `sqliblind`. It provides a CLI, a realtime web console,
 ## Requirements
 
 - Python 3.10 or newer.
-- Git for repository installation and self-updates.
+- Git available through `PATH` for repository installation and self-updates.
 - Internet access when installing dependencies or checking for updates.
-- Linux/Termux: Bash; `curl` or `wget` only when Python must be bootstrapped.
-- Windows 10/11: CMD and Windows PowerShell, used internally by the installer.
+- A POSIX-compatible shell for `install.sh`, or Windows CMD for `install.cmd`.
 
 ## Features
 
@@ -31,7 +30,7 @@ The installed command is `sqliblind`. It provides a CLI, a realtime web console,
 - Unicode/ASCII trees, relations, Mermaid, JSON, and HTML reports.
 - Sensitive-looking values masked by default.
 - TLS validation enabled and redirects disabled by default.
-- Native Linux, Termux, and Windows installers.
+- Native user-level installers for POSIX systems and Windows.
 - `sqliblind update` for checking and installing official updates.
 
 ## Installation
@@ -43,7 +42,7 @@ git clone https://github.com/IsdarlinM/imr-sqliblind.git
 cd imr-sqliblind
 ```
 
-### Linux and Termux
+### POSIX shell
 
 ```bash
 chmod +x install.sh uninstall.sh
@@ -107,13 +106,21 @@ sqliblind update --timeout 20
 sqliblind update --help
 ```
 
-The updater uses only the official repository, rejects an unexpected `origin`, refuses dirty checkouts, performs a fast-forward-only update, reinstalls into the current environment, and verifies the resulting version. See [UPDATING.md](UPDATING.md).
+The updater invokes the literal `git` command through `PATH`; it does not embed a Git executable path for any operating system or distribution. Repository commands run from the selected checkout instead of using a platform-specific Git location.
 
-Users upgrading from 0.5.1 must perform one final manual update before the command exists:
+For a trusted checkout on a filesystem that Git reports as having dubious ownership, the updater passes a command-scoped option equivalent to:
 
 ```bash
-git checkout main
-git pull --ff-only origin main
+git -c safe.directory=/absolute/checkout/path status --porcelain
+```
+
+The `safe.directory` exception applies only to the individual updater command. The updater never runs `git config --global`, does not modify `~/.gitconfig`, still validates the official `origin`, refuses dirty worktrees, and updates `main` using fast-forward only.
+
+Users upgrading from a version whose updater cannot access the checkout can update once from inside the clone:
+
+```bash
+git -c safe.directory="$(pwd -P)" checkout main
+git -c safe.directory="$(pwd -P)" pull --ff-only origin main
 ./install.sh
 ```
 
@@ -259,7 +266,7 @@ sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.6.1" \
+  --header "User-Agent:imr-sqliblind/0.6.2" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
@@ -269,7 +276,7 @@ Use `--insecure` only in a controlled laboratory with a known self-signed certif
 
 ## Uninstalling
 
-Linux and Termux:
+POSIX shell:
 
 ```bash
 ./uninstall.sh
