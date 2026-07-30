@@ -2,7 +2,7 @@
 
 ```text
 imr-sqliblind
-imr :: v0.6.4
+imr :: v0.7.0
 ```
 
 `imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
@@ -20,9 +20,14 @@ The installed command is `sqliblind`. It provides a CLI, a realtime web console,
 
 - MySQL and SQLite blind extraction dialects.
 - Status, marker, regex, and response-length oracles.
-- Binary-search inference for counts, lengths, and characters.
-- Stable two-of-three character confirmation with bounded reinference.
-- Bounded concurrency with a shared request budget and global delay.
+- Sentinel binary search for bounded counts and lengths without a separate overflow probe.
+- Adaptive character inference using weighted numeric partitions with exact fallback.
+- Optional globally scheduled bitwise inference and compatibility binary mode.
+- Character-position scheduling across all workers, including a single entity.
+- Adaptive equality confirmation with noise-aware two-of-three fallback only when required.
+- AIMD concurrency control, shared request budget, and global delay.
+- Pipelined schema → table → column discovery.
+- Batched SQLite event persistence with sampled raw request events.
 - Schemas, tables, columns, bounded rows, and cells.
 - CLI activity monitor without misleading percentages.
 - Realtime FastAPI/Uvicorn web console using SSE.
@@ -174,11 +179,52 @@ JSON output remains machine-readable:
 sqliblind --json map
 ```
 
-## Reliable character inference
+## Optimized exact inference
 
-Each inferred character is confirmed with at least two independent equality probes. If the probes disagree, a third probe decides by majority. If a candidate is rejected, the complete binary search for that character is restarted up to three times.
+The default `adaptive` mode partitions the configured numeric character-code range using identifier-oriented probabilities learned during the current scan. It does not use wordlists and it never removes uppercase, lowercase, digits, punctuation, `%`, or `_` from the configured range.
 
-Retry and recovery events are recorded as `inference.retry` and `inference.recovered`.
+Character conditions use numeric comparisons only:
+
+```sql
+(code_expression) > 80
+(code_expression) = 95
+(code_expression) IN (37,48,65,95,97)
+```
+
+`%` is inferred as code `37` and `_` as code `95`. They are never inserted into a `LIKE` pattern, so neither character can act as a wildcard during character discovery. The SQLite catalog query `name NOT LIKE 'sqlite_%'` remains limited to excluding internal SQLite tables and is unrelated to character inference.
+
+Available modes:
+
+```bash
+sqliblind --inference-mode adaptive --workers 8 map
+sqliblind --inference-mode bitwise --workers 8 map
+sqliblind --inference-mode binary --workers 8 map
+```
+
+- `adaptive`: weighted numeric partitions, online character-frequency learning, one normal equality confirmation, and robust majority fallback only after inconsistency.
+- `bitwise`: globally schedules independent code bits across workers, then confirms the reconstructed code.
+- `binary`: compatibility mode using a fast numeric binary search and adaptive fallback.
+
+Use `--serial-characters` only for diagnostics. By default, positions from one or many entities share the same worker pool. `--fixed-concurrency` disables AIMD backoff when a strictly fixed request concurrency is required. Adaptive concurrency begins at the configured worker ceiling, halves on HTTP 429 or transport failures, and recovers additively after stable responses.
+
+### Reproducible simulated benchmark
+
+Run:
+
+```bash
+python benchmarks/inference_benchmark.py --latency 0.003 --workers 8
+```
+
+For `User_Profile_50%_2026` with a simulated 3 ms oracle, the development benchmark produced:
+
+| Mode | Workers | Requests | Elapsed |
+|---|---:|---:|---:|
+| Legacy estimate | 1 | 240 | 0.7200 s |
+| Binary optimized | 8 | 172 | ~0.11 s |
+| Adaptive | 8 | 154 | ~0.10 s |
+| Bitwise | 8 | 175 | ~0.10 s |
+
+These are deterministic laboratory measurements from the included simulator, not a promise for remote targets. Real performance depends on target latency, configured delay, rate limits, oracle noise, and server capacity.
 
 ## Realtime web console
 
@@ -295,7 +341,10 @@ sqliblind --workers 64 --delay 0.1 --max-requests 5000 map
 - One thread-local HTTP session per worker.
 - Shared global delay and request budget.
 - Deterministic output ordering.
-- Stable character confirmation and bounded reinference.
+- Adaptive single confirmation with majority fallback only after inconsistency.
+- Character positions are scheduled globally instead of serially per entity.
+- HTTP concurrency starts at the configured ceiling and backs off only after HTTP 429 or network failures.
+- Web events are committed in short transactions; raw request events are sampled while exact counters are retained.
 - Cooperative pause, resume, and cancellation.
 - Pending futures cancelled after failures.
 - TLS validation enabled unless `--insecure` is explicitly supplied.
@@ -314,7 +363,7 @@ sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.6.4" \
+  --header "User-Agent:imr-sqliblind/0.7.0" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
@@ -342,9 +391,11 @@ uninstall.cmd
 python -m pip install -e ".[dev,web]"
 python -m unittest discover -s tests -v
 pytest -q
-python -m compileall -q src sqli_gallery.py sqliblind.py tests
+python -m compileall -q src sqliblind.py tests benchmarks
 bash -n install.sh uninstall.sh
 node --check src/blind_sqli/webui/app.js
+node --check src/blind_sqli/webui/inference-options.js
+python benchmarks/inference_benchmark.py --latency 0.003 --workers 8
 ruff check .
 bandit -q -r src
 ```
