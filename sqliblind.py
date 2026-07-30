@@ -11,7 +11,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from blind_sqli.cli import main  # noqa: E402
+from blind_sqli.entrypoint import main  # noqa: E402
 
 
 if __name__ == "__main__":
