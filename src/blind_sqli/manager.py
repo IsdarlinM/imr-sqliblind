@@ -3,22 +3,28 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .client import HttpClient, HttpConfig
 from .dialects import get_dialect
+from .event_batch import EventBatchWriter
 from .events import EventEmitter, ScanCancelled, ScanControl, ScanEvent
-from .extractor import BlindExtractor, ExtractorConfig
+from .extractor import BlindExtractor, ExtractorConfig, INFERENCE_MODES
 from .graph import render_database_map
 from .models import DatabaseMap, Schema, Table
 from .oracle import ResponseOracle
 from .store import SessionStore
 
-
-SENSITIVE_HEADERS = {"authorization", "cookie", "proxy-authorization", "x-api-key"}
+SENSITIVE_HEADERS = {
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+    "x-api-key",
+}
 
 
 def utc_now() -> str:
@@ -58,6 +64,11 @@ class ScanSettings:
     max_value_length: int = 128
     max_data_bytes: int = 10_000
     reveal_sensitive_values: bool = False
+    inference_mode: str = "adaptive"
+    parallel_characters: bool = True
+    adaptive_confirmation: bool = True
+    adaptive_concurrency: bool = True
+    request_event_sample: int = 20
 
     def __post_init__(self) -> None:
         if not self.url and not self.url_template:
@@ -66,12 +77,16 @@ class ScanSettings:
             raise ValueError("dialect must be mysql or sqlite")
         if self.oracle not in {"status", "marker", "regex", "length"}:
             raise ValueError("invalid oracle mode")
+        if self.inference_mode not in INFERENCE_MODES:
+            raise ValueError("invalid inference mode")
         if not self.true_statuses or any(
             code < 100 or code > 599 for code in self.true_statuses
         ):
             raise ValueError("true_statuses must contain valid HTTP status codes")
         if not 1 <= self.workers <= 16:
             raise ValueError("workers must be between 1 and 16")
+        if not 0 <= self.min_char_code <= self.max_char_code <= 0x10FFFF:
+            raise ValueError("invalid character code range")
         if not 1 <= self.max_rows <= 25:
             raise ValueError("max_rows must be between 1 and 25")
         if not 1 <= self.max_data_columns <= 20:
@@ -82,25 +97,37 @@ class ScanSettings:
             raise ValueError("max_data_bytes must be between 1 and 50000")
         if self.include_data and not self.data_tables:
             raise ValueError("data_tables is required when include_data is enabled")
+        if not 1 <= self.request_event_sample <= 1000:
+            raise ValueError("request_event_sample must be between 1 and 1000")
         for selector in self.data_tables:
             if selector.count(".") != 1:
                 raise ValueError("data table selectors must use schema.table")
 
     @classmethod
-    def from_mapping(cls, value: dict[str, Any]) -> "ScanSettings":
+    def from_mapping(cls, value: dict[str, Any]) -> ScanSettings:
         data = dict(value)
         statuses = data.get("true_statuses", {200})
         if isinstance(statuses, str):
             statuses = {
-                int(item.strip()) for item in statuses.split(",") if item.strip()
+                int(item.strip())
+                for item in statuses.split(",")
+                if item.strip()
             }
         else:
             statuses = {int(item) for item in statuses}
         tables = data.get("data_tables", set())
         if isinstance(tables, str):
-            tables = {item.strip() for item in tables.split(",") if item.strip()}
+            tables = {
+                item.strip()
+                for item in tables.split(",")
+                if item.strip()
+            }
         else:
-            tables = {str(item).strip() for item in tables if str(item).strip()}
+            tables = {
+                str(item).strip()
+                for item in tables
+                if str(item).strip()
+            }
         data["true_statuses"] = statuses
         data["data_tables"] = tables
         return cls(**data)
@@ -111,7 +138,7 @@ class ScanSettings:
         result["data_tables"] = sorted(self.data_tables)
         result["cookies"] = {key: "***" for key in self.cookies}
         result["headers"] = {
-            key: ("***" if key.casefold() in SENSITIVE_HEADERS else value)
+            key: "***" if key.casefold() in SENSITIVE_HEADERS else value
             for key, value in self.headers.items()
         }
         if result.get("proxy"):
@@ -130,7 +157,13 @@ class ScanManager:
         self,
         store: SessionStore,
         extractor_factory: Callable[
-            [ScanSettings, str, Callable[[ScanEvent], None], ScanControl], BlindExtractor
+            [
+                ScanSettings,
+                str,
+                Callable[[ScanEvent], None],
+                ScanControl,
+            ],
+            BlindExtractor,
         ]
         | None = None,
     ) -> None:
@@ -138,6 +171,7 @@ class ScanManager:
         self._factory = extractor_factory or self._default_extractor
         self._runtime: dict[str, RuntimeScan] = {}
         self._lock = threading.RLock()
+        self._writer = EventBatchWriter(store)
 
     @staticmethod
     def _default_extractor(
@@ -159,6 +193,9 @@ class ScanManager:
                 headers=settings.headers,
                 cookies=settings.cookies,
                 proxy=settings.proxy,
+                adaptive_concurrency=settings.adaptive_concurrency,
+                min_concurrency=1,
+                max_concurrency=settings.workers,
             )
         )
         oracle = ResponseOracle.from_options(
@@ -183,12 +220,19 @@ class ScanManager:
             scan_id=scan_id,
             event_callback=callback,
             control=control,
+            inference_mode=settings.inference_mode,
+            parallel_characters=settings.parallel_characters,
+            adaptive_confirmation=settings.adaptive_confirmation,
         )
 
     def start(self, settings: ScanSettings) -> str:
         scan_id = uuid.uuid4().hex
         created = utc_now()
         self.store.create_scan(scan_id, settings.public_dict(), created)
+        self._writer.configure_scan(
+            scan_id,
+            request_sample=settings.request_event_sample,
+        )
         control = ScanControl()
         thread = threading.Thread(
             target=self._run,
@@ -202,18 +246,13 @@ class ScanManager:
         return scan_id
 
     def _record(self, event: ScanEvent) -> None:
-        self.store.record_event(event)
-        if event.event_type == "request.completed":
-            scan = self.store.get_scan(event.scan_id)
-            stats = dict(scan["stats"] if scan else {})
-            stats["requests"] = event.payload.get("requests_used", 0)
-            stats["last_request_seconds"] = event.payload.get("elapsed_seconds", 0)
-            self.store.update_scan(
-                event.scan_id, stats=stats, timestamp=event.timestamp
-            )
+        self._writer.submit(event)
 
     def _run(
-        self, scan_id: str, settings: ScanSettings, control: ScanControl
+        self,
+        scan_id: str,
+        settings: ScanSettings,
+        control: ScanControl,
     ) -> None:
         emitter = EventEmitter(scan_id, self._record)
         self.store.update_scan(scan_id, status="running", timestamp=utc_now())
@@ -233,20 +272,36 @@ class ScanManager:
                 reveal_sensitive_values=settings.reveal_sensitive_values,
             )
             summary = database.to_dict()["summary"]
+            performance = (
+                extractor.performance_snapshot()
+                if hasattr(extractor, "performance_snapshot")
+                else {}
+            )
             stats = {
                 **summary,
                 "requests": extractor.client.requests_used,
                 "elapsed_seconds": round(extractor.elapsed_seconds, 3),
+                "performance": performance,
             }
             emitter.emit("scan.completed", summary=stats)
+            self._writer.flush()
             self.store.update_scan(
-                scan_id, status="completed", stats=stats, timestamp=utc_now()
+                scan_id,
+                status="completed",
+                stats=stats,
+                timestamp=utc_now(),
             )
         except ScanCancelled:
             emitter.emit("scan.cancelled")
-            self.store.update_scan(scan_id, status="cancelled", timestamp=utc_now())
+            self._writer.flush()
+            self.store.update_scan(
+                scan_id,
+                status="cancelled",
+                timestamp=utc_now(),
+            )
         except Exception as exc:
             emitter.emit("scan.failed", error=str(exc))
+            self._writer.flush()
             self.store.update_scan(
                 scan_id,
                 status="failed",
@@ -254,6 +309,7 @@ class ScanManager:
                 timestamp=utc_now(),
             )
         finally:
+            self._writer.remove_scan(scan_id)
             with self._lock:
                 self._runtime.pop(scan_id, None)
 
@@ -268,19 +324,31 @@ class ScanManager:
         runtime = self._runtime_scan(scan_id)
         runtime.control.pause()
         event = EventEmitter(scan_id, self._record).emit("scan.paused")
-        self.store.update_scan(scan_id, status="paused", timestamp=event.timestamp)
+        self.store.update_scan(
+            scan_id,
+            status="paused",
+            timestamp=event.timestamp,
+        )
 
     def resume(self, scan_id: str) -> None:
         runtime = self._runtime_scan(scan_id)
         runtime.control.resume()
         event = EventEmitter(scan_id, self._record).emit("scan.resumed")
-        self.store.update_scan(scan_id, status="running", timestamp=event.timestamp)
+        self.store.update_scan(
+            scan_id,
+            status="running",
+            timestamp=event.timestamp,
+        )
 
     def stop(self, scan_id: str) -> None:
         runtime = self._runtime_scan(scan_id)
         runtime.control.stop()
         event = EventEmitter(scan_id, self._record).emit("scan.stopping")
-        self.store.update_scan(scan_id, status="stopping", timestamp=event.timestamp)
+        self.store.update_scan(
+            scan_id,
+            status="stopping",
+            timestamp=event.timestamp,
+        )
 
     def export(self, scan_id: str, output_format: str) -> tuple[str, str]:
         snapshot = self.store.snapshot(scan_id)
@@ -299,8 +367,8 @@ class ScanManager:
                 output_format=selected,
                 title=f"imr-sqliblind scan {scan_id[:8]}",
             )
-            media = "text/html" if selected == "html" else "text/plain"
-            return content, media
+            media_type = "text/html" if selected == "html" else "text/plain"
+            return content, media_type
         raise ValueError("format must be json, tree, relations, mermaid, or html")
 
     @staticmethod
@@ -308,7 +376,7 @@ class ScanManager:
         database = DatabaseMap()
         schemas: dict[str, Schema] = {}
         tables: dict[str, Table] = {}
-        row_values: dict[str, dict[str, str]] = {}
+        rows: dict[str, dict[str, str]] = {}
         for entity in snapshot["entities"]:
             kind = entity["type"]
             data = entity["data"]
@@ -319,14 +387,15 @@ class ScanManager:
             elif kind == "table":
                 parent = schemas.get(entity["parent_id"])
                 if parent is not None:
-                    table = parent.add_table(Table(entity["name"]))
-                    tables[entity["id"]] = table
+                    tables[entity["id"]] = parent.add_table(
+                        Table(entity["name"])
+                    )
             elif kind == "column":
                 parent = tables.get(entity["parent_id"])
                 if parent is not None:
                     parent.add_column(entity["name"])
             elif kind == "row":
-                row_values[entity["id"]] = {
+                rows[entity["id"]] = {
                     str(key): str(value)
                     for key, value in data.get("values", {}).items()
                 }
@@ -334,7 +403,7 @@ class ScanManager:
             if entity["type"] != "row":
                 continue
             parent = tables.get(entity["parent_id"])
-            values = row_values.get(entity["id"], {})
+            values = rows.get(entity["id"], {})
             if parent is not None and values:
                 parent.rows.append(values)
         return database
@@ -347,6 +416,7 @@ class ScanManager:
         for runtime in runtimes:
             if runtime.thread is not threading.current_thread():
                 runtime.thread.join(timeout=timeout)
+        self._writer.stop()
 
     def workspace_path(self) -> Path:
         return self.store.path
