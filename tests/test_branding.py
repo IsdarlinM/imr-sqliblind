@@ -17,9 +17,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class BrandingTests(unittest.TestCase):
     def test_public_project_and_command_names(self) -> None:
-        metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        metadata = tomllib.loads(
+            (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        )
         self.assertEqual(metadata["project"]["name"], "imr-sqliblind")
-        self.assertEqual(metadata["project"]["version"], "0.6.4")
+        self.assertEqual(metadata["project"]["version"], "0.7.0")
         self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
         self.assertEqual(
             metadata["project"]["scripts"],
@@ -32,7 +34,10 @@ class BrandingTests(unittest.TestCase):
         self.assertEqual(args.title, "imr-sqliblind schema map")
 
     def test_direct_entry_point_import_has_no_network_activity(self) -> None:
-        spec = importlib.util.spec_from_file_location("sqliblind_entry", ROOT / "sqliblind.py")
+        spec = importlib.util.spec_from_file_location(
+            "sqliblind_entry",
+            ROOT / "sqliblind.py",
+        )
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
