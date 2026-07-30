@@ -22,14 +22,14 @@
         <div class="two"><label>Parameter<input name="parameter" value="id"></label><label>Dialect<select name="dialect"><option>mysql</option><option>sqlite</option></select></label></div>
         <label>URL template<input name="url_template" placeholder="https://lab/?id={{PAYLOAD}}"></label>
         <div class="two"><label>Oracle<select name="oracle"><option>status</option><option>marker</option><option>regex</option><option>length</option></select></label><label>True statuses<input name="true_statuses" value="200"></label></div>
-        <label>Marker / regex<input name="true_marker" placeholder="RESULT=TRUE"></label>
+        <div class="two"><label>True marker<input name="true_marker" placeholder="RESULT=TRUE"></label><label>True regex<input name="true_regex" placeholder="Welcome\s+back"></label></div>
         <div class="three"><label>True length<input name="true_length" type="number"></label><label>Tolerance<input name="length_tolerance" type="number" value="0"></label><label>Workers<input name="workers" type="number" min="1" max="16" value="4"></label></div>
-        <div class="three"><label>Delay<input name="delay" type="number" min="0" step="0.01" value="0.1"></label><label>Timeout<input name="timeout" type="number" min="0.1" value="10"></label><label>Max requests<input name="max_requests" type="number" min="1" value="5000"></label></div>
+        <div class="three"><label>Delay<input name="delay" type="number" min="0" step="0.01" value="0.1"></label><label>Timeout<input name="timeout" type="number" min="0.1" value="10"></label><label>Retries<input name="retries" type="number" min="0" max="5" value="1"></label></div><label>Max requests<input name="max_requests" type="number" min="1" value="5000"></label>
         <details><summary>HTTP and limits</summary>
           <label>Headers (one KEY:VALUE per line)<textarea name="headers"></textarea></label>
           <label>Cookies (one KEY=VALUE per line)<textarea name="cookies"></textarea></label>
           <label>Proxy<input name="proxy"></label>
-          <div class="two"><label>Max length<input name="max_length" type="number" value="128"></label><label>Max items<input name="max_items" type="number" value="128"></label></div>
+          <div class="two"><label>Max length<input name="max_length" type="number" value="128"></label><label>Max items<input name="max_items" type="number" value="128"></label></div><div class="two"><label>Min char code<input name="min_char_code" type="number" min="0" value="32"></label><label>Max char code<input name="max_char_code" type="number" min="0" value="126"></label></div>
           <label class="check"><input name="insecure" type="checkbox">Allow self-signed TLS certificate</label>
           <label class="check"><input name="skip_calibration" type="checkbox">Skip oracle calibration</label>
         </details>
