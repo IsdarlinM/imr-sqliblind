@@ -45,11 +45,13 @@ class PackagingTests(unittest.TestCase):
                 ["bash", "-n", *(str(script) for script in scripts)],
                 check=True,
             )
-        javascript = ROOT / "src/blind_sqli/webui/app.js"
-        subprocess.run(["node", "--check", str(javascript)], check=True)
-        html = (ROOT / "src/blind_sqli/webui/index.html").read_text(
-            encoding="utf-8"
-        )
+        webui = ROOT / "src" / "blind_sqli" / "webui"
+        for javascript in ("app.js", "inference-options.js"):
+            subprocess.run(
+                ["node", "--check", str(webui / javascript)],
+                check=True,
+            )
+        html = (webui / "index.html").read_text(encoding="utf-8")
         self.assertNotIn('src="http://', html)
         self.assertNotIn('src="https://', html)
         self.assertNotIn('href="http://', html)
