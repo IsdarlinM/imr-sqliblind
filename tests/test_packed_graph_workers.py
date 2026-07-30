@@ -28,9 +28,11 @@ class PackedGraphAndWorkerTests(unittest.TestCase):
         )
         self.assertIn("graphState.positions.clear()", JAVASCRIPT)
 
-    def test_activity_panel_only_renders_running_workers(self) -> None:
+    def test_activity_panel_only_renders_configured_active_workers(self) -> None:
         self.assertIn("renderOnlyActiveWorkers", JAVASCRIPT)
         self.assertIn('activity.status === "running"', JAVASCRIPT)
+        self.assertIn("state.scan?.config?.workers", JAVASCRIPT)
+        self.assertIn(".slice(0, workerLimit)", JAVASCRIPT)
         self.assertIn('empty.textContent = "No active workers."', JAVASCRIPT)
 
 
