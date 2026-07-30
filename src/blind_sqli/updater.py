@@ -7,9 +7,10 @@ import re
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import requests
 
@@ -246,6 +247,13 @@ def perform_update(
 ) -> UpdateStatus:
     status = check_for_updates(timeout=timeout)
     discovered = discover_source(source)
+    if parse_version(status.available_version) < parse_version(__version__):
+        status.source = str(discovered) if discovered else None
+        status.message = (
+            f"Installed version {__version__} is newer than the available "
+            f"version {status.available_version}; no downgrade was performed"
+        )
+        return status
     if not status.update_available and not force:
         status.source = str(discovered) if discovered else None
         return status
@@ -287,7 +295,7 @@ def build_update_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--source",
         metavar="PATH",
-        help="Use this official Git checkout instead of automatic discovery.",
+        help="Use this official Git checkout instead of automatic source discovery.",
     )
     parser.add_argument(
         "--timeout",
