@@ -47,7 +47,7 @@ exit /b 2
 :usage
 echo Usage: install.cmd [options]
 echo.
-echo Installs imr-sqliblind for the current user.
+echo Installs imr-sqliblind and the realtime web console for the current user.
 echo.
 echo Options:
 echo   --prefix PATH     Custom installation directory.
@@ -149,10 +149,10 @@ if not exist "%VENV_PYTHON%" (
   exit /b 1
 )
 
-echo [+] Installing project dependencies
+echo [+] Installing project dependencies and web console
 "%VENV_PYTHON%" -m ensurepip --upgrade >nul 2>&1
 "%VENV_PYTHON%" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel || exit /b 1
-"%VENV_PYTHON%" -m pip install --disable-pip-version-check --upgrade "%PROJECT_ROOT%" || exit /b 1
+"%VENV_PYTHON%" -m pip install --disable-pip-version-check --upgrade "%PROJECT_ROOT%[web]" || exit /b 1
 if not exist "%VENV_COMMAND%" (
   echo [x] Installation completed without creating %VENV_COMMAND% 1>&2
   exit /b 1
@@ -172,8 +172,9 @@ set "SQLIBLIND_PYTHON=%VENV_PYTHON%"
 set "SQLIBLIND_BIN=%BIN_DIR%"
 set "PATH=%BIN_DIR%;%PATH%"
 
-echo [+] Verifying installation
+echo [+] Verifying CLI and web console
 call "%BIN_DIR%\sqliblind.cmd" --version || exit /b 1
+call "%BIN_DIR%\sqliblind.cmd" web --help >nul || exit /b 1
 echo.
 echo Installation completed.
 echo   Home:    %PREFIX%

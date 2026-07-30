@@ -13,10 +13,14 @@ class ImportTests(unittest.TestCase):
                 "blind_sqli.cli",
                 "blind_sqli.client",
                 "blind_sqli.dialects",
+                "blind_sqli.events",
                 "blind_sqli.extractor",
                 "blind_sqli.graph",
+                "blind_sqli.manager",
                 "blind_sqli.models",
                 "blind_sqli.oracle",
+                "blind_sqli.store",
+                "blind_sqli.web",
             ):
                 importlib.import_module(module)
             mocked_get.assert_not_called()

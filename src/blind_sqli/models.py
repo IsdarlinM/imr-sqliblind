@@ -85,8 +85,25 @@ class DatabaseMap:
         )
 
     @property
+    def row_count(self) -> int:
+        return sum(
+            len(table.rows)
+            for schema in self.schemas
+            for table in schema.tables
+        )
+
+    @property
+    def cell_count(self) -> int:
+        return sum(
+            len(row)
+            for schema in self.schemas
+            for table in schema.tables
+            for row in table.rows
+        )
+
+    @property
     def relationship_count(self) -> int:
-        return self.table_count + self.column_count
+        return self.table_count + self.column_count + self.row_count + self.cell_count
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -95,6 +112,8 @@ class DatabaseMap:
                 "schemas": self.schema_count,
                 "tables": self.table_count,
                 "columns": self.column_count,
+                "rows": self.row_count,
+                "cells": self.cell_count,
                 "relationships": self.relationship_count,
             },
         }

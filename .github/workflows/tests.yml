@@ -12,7 +12,7 @@ jobs:
   test:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -25,7 +25,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e ".[dev,web]"
       - name: Compile
         run: python -m compileall -q src sqli_gallery.py sqliblind.py tests
       - name: Validate shell scripts
@@ -34,6 +34,8 @@ jobs:
         run: python -m unittest discover -s tests -v
       - name: Pytest
         run: pytest -q
+      - name: Validate web JavaScript
+        run: node --check src/blind_sqli/webui/app.js
       - name: Ruff
         run: ruff check .
       - name: Bandit
@@ -42,7 +44,7 @@ jobs:
   installer-linux:
     name: Linux native installer
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,6 +55,7 @@ jobs:
           chmod +x install.sh uninstall.sh
           ./install.sh --prefix "$RUNNER_TEMP/imr-sqliblind" --no-path
           "$RUNNER_TEMP/imr-sqliblind/bin/sqliblind" --version
+          "$RUNNER_TEMP/imr-sqliblind/bin/sqliblind" web --help
       - name: Uninstall
         run: |
           ./uninstall.sh --prefix "$RUNNER_TEMP/imr-sqliblind" --no-path
@@ -61,7 +64,7 @@ jobs:
   installer-windows:
     name: Windows native installer
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -72,6 +75,7 @@ jobs:
         run: |
           call install.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --no-path
           call "%RUNNER_TEMP%\imr-sqliblind\bin\sqliblind.cmd" --version
+          call "%RUNNER_TEMP%\imr-sqliblind\bin\sqliblind.cmd" web --help
       - name: Uninstall
         shell: cmd
         run: |

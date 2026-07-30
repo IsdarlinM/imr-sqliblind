@@ -17,7 +17,7 @@ usage() {
   cat <<'USAGE'
 Usage: ./install.sh [options]
 
-Installs imr-sqliblind for the current user.
+Installs imr-sqliblind for the current user, including the realtime web console.
 
 Options:
   --prefix PATH     Custom installation directory.
@@ -140,9 +140,9 @@ fi
 VENV_PYTHON="$VENV_DIR/bin/python"
 VENV_COMMAND="$VENV_DIR/bin/$COMMAND_NAME"
 "$VENV_PYTHON" -m ensurepip --upgrade >/dev/null 2>&1 || true
-log "Installing project dependencies"
+log "Installing project dependencies and web console"
 "$VENV_PYTHON" -m pip install --disable-pip-version-check --upgrade pip setuptools wheel
-"$VENV_PYTHON" -m pip install --disable-pip-version-check --upgrade "$PROJECT_ROOT"
+"$VENV_PYTHON" -m pip install --disable-pip-version-check --upgrade "$PROJECT_ROOT[web]"
 [[ -x "$VENV_COMMAND" ]] || die "Installation completed without creating $VENV_COMMAND"
 
 mkdir -p "$BIN_DIR"
@@ -203,8 +203,9 @@ export SQLIBLIND_PYTHON="$VENV_PYTHON"
 export SQLIBLIND_BIN="$BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
 
-log "Verifying installation"
+log "Verifying CLI and web console"
 "$BIN_DIR/$COMMAND_NAME" --version
+"$BIN_DIR/$COMMAND_NAME" web --help >/dev/null
 printf '\nInstallation completed.\n'
 printf '  Home:    %s\n' "$PREFIX"
 printf '  Python:  %s\n' "$VENV_PYTHON"

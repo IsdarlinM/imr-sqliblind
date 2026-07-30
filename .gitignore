@@ -12,3 +12,6 @@ build/
 results/
 reports/
 imr-sqliblind-schema-map.html
+*.db
+*.db-wal
+*.db-shm

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="sqliblind-csrf" content="__CSRF__">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self'; style-src 'self'; script-src 'self' 'nonce-__NONCE__'; img-src 'self' data:; font-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'">
+<title>imr-sqliblind __VERSION__</title>
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div><strong>imr-sqliblind</strong><span class="version">v__VERSION__</span></div>
+  <div id="connection" class="status">offline</div>
+</header>
+<main class="layout">
+  <aside class="sidebar">
+    <section class="panel">
+      <h2>New authorized scan</h2>
+      <form id="scanForm">
+        <label>Target URL<input name="url" required placeholder="https://lab.example/fetch"></label>
+        <div class="two"><label>Parameter<input name="parameter" value="id"></label><label>Dialect<select name="dialect"><option>mysql</option><option>sqlite</option></select></label></div>
+        <label>URL template<input name="url_template" placeholder="https://lab/?id={{PAYLOAD}}"></label>
+        <div class="two"><label>Oracle<select name="oracle"><option>status</option><option>marker</option><option>regex</option><option>length</option></select></label><label>True statuses<input name="true_statuses" value="200"></label></div>
+        <div class="two"><label>True marker<input name="true_marker" placeholder="RESULT=TRUE"></label><label>True regex<input name="true_regex" placeholder="Welcome\s+back"></label></div>
+        <div class="three"><label>True length<input name="true_length" type="number"></label><label>Tolerance<input name="length_tolerance" type="number" value="0"></label><label>Workers<input name="workers" type="number" min="1" max="16" value="4"></label></div>
+        <div class="three"><label>Delay<input name="delay" type="number" min="0" step="0.01" value="0.1"></label><label>Timeout<input name="timeout" type="number" min="0.1" value="10"></label><label>Retries<input name="retries" type="number" min="0" max="5" value="1"></label></div><label>Max requests<input name="max_requests" type="number" min="1" value="5000"></label>
+        <details><summary>HTTP and limits</summary>
+          <label>Headers (one KEY:VALUE per line)<textarea name="headers"></textarea></label>
+          <label>Cookies (one KEY=VALUE per line)<textarea name="cookies"></textarea></label>
+          <label>Proxy<input name="proxy"></label>
+          <div class="two"><label>Max length<input name="max_length" type="number" value="128"></label><label>Max items<input name="max_items" type="number" value="128"></label></div><div class="two"><label>Min char code<input name="min_char_code" type="number" min="0" value="32"></label><label>Max char code<input name="max_char_code" type="number" min="0" value="126"></label></div>
+          <label class="check"><input name="insecure" type="checkbox">Allow self-signed TLS certificate</label>
+          <label class="check"><input name="skip_calibration" type="checkbox">Skip oracle calibration</label>
+        </details>
+        <details><summary>Bounded row values</summary>
+          <label class="check"><input name="include_data" type="checkbox">Enable explicit row extraction</label>
+          <label>Allowed tables<input name="data_tables" placeholder="schema.table, other.table"></label>
+          <div class="two"><label>Rows<input name="max_rows" type="number" min="1" max="25" value="5"></label><label>Columns<input name="max_data_columns" type="number" min="1" max="20" value="10"></label></div>
+          <div class="two"><label>Value length<input name="max_value_length" type="number" min="1" max="512" value="128"></label><label>Total bytes<input name="max_data_bytes" type="number" min="1" max="50000" value="10000"></label></div>
+          <label class="check"><input name="reveal_sensitive_values" type="checkbox">Show sensitive-looking values</label>
+        </details>
+        <button class="primary" type="submit">Start scan</button>
+      </form>
+    </section>
+    <section class="panel"><h2>Sessions</h2><div id="sessions" class="sessions"></div></section>
+  </aside>
+  <section class="workspace">
+    <section class="panel activity-panel">
+      <div class="section-head"><div><h2>Current activity</h2><p>No percentages—each worker shows its actual operation.</p></div><span id="activityPhase" class="badge">idle</span></div>
+      <div id="activityView" class="activities"><div class="empty">Select or start a scan.</div></div>
+    </section>
+    <section class="metrics" id="metrics"></section>
+    <section class="panel controls">
+      <button id="pauseBtn">Pause</button><button id="resumeBtn">Resume</button><button id="stopBtn">Stop</button>
+      <select id="exportFormat"><option>json</option><option>tree</option><option>relations</option><option>mermaid</option><option>html</option></select><button id="exportBtn">Export</button>
+      <input id="filter" type="search" placeholder="Filter schemas, tables, columns, rows or cells">
+    </section>
+    <nav class="tabs"><button data-pane="tree" class="active">Tree</button><button data-pane="graph">Graph</button><button data-pane="entities">Entities</button><button data-pane="events">Events</button></nav>
+    <section id="treePane" class="panel pane"></section>
+    <section id="graphPane" class="panel pane hidden"><svg id="graph" aria-label="Relationship graph"></svg></section>
+    <section id="entitiesPane" class="panel pane hidden"><div id="entities" class="entity-grid"></div></section>
+    <section id="eventsPane" class="panel pane hidden"><pre id="events"></pre></section>
+  </section>
+</main>
+<aside id="drawer" class="drawer" aria-hidden="true"><button id="drawerClose" aria-label="Close">×</button><h2 id="drawerTitle">Details</h2><pre id="drawerBody"></pre></aside>
+<div id="toast" class="toast"></div>
+<script nonce="__NONCE__" src="/assets/app.js"></script>
+<script nonce="__NONCE__">
+const selectScanBase=selectScan;
+selectScan=async function(id){await selectScanBase(id);const snapshot=await(await api(`/api/scans/${id}/snapshot`)).json();for(const activity of snapshot.activities||[])state.activities.set(activity.id,activity);renderActivities()};
+const applyActivityBase=applyActivity;
+applyActivity=function(type,activity){if(activity&&activity.id&&!activity.started_at){const previous=state.activities.get(activity.id);activity={...activity,started_at:previous?.started_at||new Date().toISOString()}}applyActivityBase(type,activity)};
+const renderActivitiesBase=renderActivities;
+renderActivities=function(){const now=Date.now();for(const activity of state.activities.values())if(activity.status==="running"&&activity.started_at)activity.elapsed_seconds=Math.max(0,(now-Date.parse(activity.started_at))/1000);renderActivitiesBase()};
+setInterval(()=>{if(state.scanId)renderActivities()},500);
+</script>
+</body>
+</html>

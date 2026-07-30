@@ -63,9 +63,27 @@ class SqlDialect(ABC):
     def column_name_expression(self, schema: str, table: str, index: int) -> str:
         raise NotImplementedError
 
+    def row_count_expression(self, schema: str, table: str) -> str:
+        raise NotImplementedError("row extraction is not supported by this dialect")
+
+    def cell_value_expression(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        row_index: int,
+        order_column: str | None = None,
+    ) -> str:
+        raise NotImplementedError
+
 
 class MySqlDialect(SqlDialect):
     name = "mysql"
+
+    @staticmethod
+    def _quote_identifier(value: str) -> str:
+        validate_identifier(value)
+        return "`" + value.replace("`", "``") + "`"
 
     def text_expression(self, expression: str) -> str:
         return f"COALESCE(CAST(({expression}) AS CHAR), '')"
@@ -110,9 +128,38 @@ class MySqlDialect(SqlDialect):
             f"ORDER BY ordinal_position LIMIT 1 OFFSET {index}"
         )
 
+    def row_count_expression(self, schema: str, table: str) -> str:
+        schema_q = self._quote_identifier(schema)
+        table_q = self._quote_identifier(table)
+        return f"SELECT COUNT(*) FROM {schema_q}.{table_q}"
+
+    def cell_value_expression(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        row_index: int,
+        order_column: str | None = None,
+    ) -> str:
+        if row_index < 0:
+            raise DialectError("row_index cannot be negative")
+        schema_q = self._quote_identifier(schema)
+        table_q = self._quote_identifier(table)
+        column_q = self._quote_identifier(column)
+        order_q = self._quote_identifier(order_column or column)
+        return (
+            f"SELECT {column_q} FROM {schema_q}.{table_q} "
+            f"ORDER BY {order_q} LIMIT 1 OFFSET {row_index}"
+        )
+
 
 class SqliteDialect(SqlDialect):
     name = "sqlite"
+
+    @staticmethod
+    def _quote_identifier(value: str) -> str:
+        validate_identifier(value)
+        return '"' + value.replace('"', '""') + '"'
 
     def text_expression(self, expression: str) -> str:
         return f"COALESCE(CAST(({expression}) AS TEXT), '')"
@@ -133,8 +180,7 @@ class SqliteDialect(SqlDialect):
         )
 
     def _schema_prefix(self, schema: str) -> str:
-        validate_identifier(schema)
-        return '"' + schema.replace('"', '""') + '"'
+        return self._quote_identifier(schema)
 
     def table_count_expression(self, schema: str) -> str:
         prefix = self._schema_prefix(schema)
@@ -166,6 +212,30 @@ class SqliteDialect(SqlDialect):
         return (
             f"SELECT name FROM pragma_table_info({sql_literal(table)}) "
             f"ORDER BY cid LIMIT 1 OFFSET {index}"
+        )
+
+    def row_count_expression(self, schema: str, table: str) -> str:
+        schema_q = self._quote_identifier(schema)
+        table_q = self._quote_identifier(table)
+        return f"SELECT COUNT(*) FROM {schema_q}.{table_q}"
+
+    def cell_value_expression(
+        self,
+        schema: str,
+        table: str,
+        column: str,
+        row_index: int,
+        order_column: str | None = None,
+    ) -> str:
+        if row_index < 0:
+            raise DialectError("row_index cannot be negative")
+        schema_q = self._quote_identifier(schema)
+        table_q = self._quote_identifier(table)
+        column_q = self._quote_identifier(column)
+        order_q = self._quote_identifier(order_column or column)
+        return (
+            f"SELECT {column_q} FROM {schema_q}.{table_q} "
+            f"ORDER BY {order_q} LIMIT 1 OFFSET {row_index}"
         )
 
 
