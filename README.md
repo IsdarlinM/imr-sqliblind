@@ -2,7 +2,7 @@
 
 ```text
 imr-sqliblind
-imr :: v0.6.0
+imr :: v0.6.1
 ```
 
 `imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
@@ -22,6 +22,7 @@ The installed command is `sqliblind`. It provides a CLI, a realtime web console,
 - MySQL and SQLite blind extraction dialects.
 - Status, marker, regex, and response-length oracles.
 - Binary-search inference for counts, lengths, and characters.
+- Stable two-of-three character confirmation with bounded reinference after inconsistent responses.
 - Bounded concurrency with a shared request budget and global delay.
 - Schemas, tables, columns, bounded rows, and cells.
 - CLI activity monitor without misleading percentages.
@@ -162,6 +163,12 @@ JSON output remains machine-readable:
 sqliblind --json map
 ```
 
+## Reliable character inference
+
+Each inferred character is confirmed with at least two independent equality probes. If the two probes disagree, a third probe decides by majority. If the candidate is rejected, the complete binary search for that character is restarted up to three times. Retry and recovery events are recorded as `inference.retry` and `inference.recovered`.
+
+This protects long-running maps from isolated status-code anomalies without disabling the global delay, request budget, TLS verification, or deterministic output ordering.
+
 ## Realtime web console
 
 Start locally:
@@ -233,6 +240,7 @@ sqliblind --workers 64 --delay 0.1 --max-requests 5000 map
 - One thread-local HTTP session per worker.
 - Shared global delay and request budget.
 - Deterministic output ordering.
+- Stable character confirmation and bounded reinference.
 - Cooperative pause, resume, and cancellation.
 - Pending futures cancelled after failures.
 - TLS validation enabled unless `--insecure` is explicitly supplied.
@@ -251,7 +259,7 @@ sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.6.0" \
+  --header "User-Agent:imr-sqliblind/0.6.1" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas

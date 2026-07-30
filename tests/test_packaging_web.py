@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class PackagingTests(unittest.TestCase):
     def test_metadata_resources_and_documentation(self) -> None:
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual(metadata["project"]["version"], "0.6.0")
+        self.assertEqual(metadata["project"]["version"], "0.6.1")
         self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
         self.assertIn("web", metadata["project"]["optional-dependencies"])
         package_data = metadata["tool"]["setuptools"]["package-data"]["blind_sqli"]
