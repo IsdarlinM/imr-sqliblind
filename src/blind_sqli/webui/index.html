@@ -108,6 +108,30 @@
             <input name="max_requests" type="number" min="1" value="5000">
           </label>
 
+          <details open>
+            <summary>Inference performance</summary>
+            <div class="details-content">
+              <div class="field-grid field-grid--two">
+                <label>
+                  <span>Inference mode</span>
+                  <select name="inference_mode">
+                    <option value="adaptive" selected>adaptive · weighted numeric partitions</option>
+                    <option value="bitwise">bitwise · parallel code bits</option>
+                    <option value="binary">binary · compatibility mode</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Request event sample</span>
+                  <input name="request_event_sample" type="number" min="1" max="1000" value="20">
+                </label>
+              </div>
+              <label class="check"><input name="parallel_characters" type="checkbox" checked>Infer character positions concurrently</label>
+              <label class="check"><input name="adaptive_confirmation" type="checkbox" checked>Use adaptive confirmation and robust fallback</label>
+              <label class="check"><input name="adaptive_concurrency" type="checkbox" checked>Reduce concurrency after HTTP 429 or network errors</label>
+              <p class="muted">Character discovery compares numeric codes only. Percent (37) and underscore (95) are never submitted as LIKE patterns.</p>
+            </div>
+          </details>
+
           <details>
             <summary>HTTP and limits</summary>
             <div class="details-content">
@@ -256,5 +280,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script nonce="__NONCE__" src="/assets/app.js"></script>
+  <script nonce="__NONCE__" src="/assets/inference-options.js"></script>
 </body>
 </html>
