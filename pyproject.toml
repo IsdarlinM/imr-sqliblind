@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imr-sqliblind"
-version = "0.6.4"
-description = "Bounded blind SQL injection research helper with realtime visual sessions"
+version = "0.7.0"
+description = "Bounded blind SQL injection research helper with adaptive inference"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["requests>=2.31,<3"]
@@ -16,19 +16,8 @@ authors = [{name = "imr"}]
 sqliblind = "blind_sqli.entrypoint:main"
 
 [project.optional-dependencies]
-web = [
-  "fastapi>=0.110,<1",
-  "uvicorn>=0.30,<1",
-]
-dev = [
-  "pytest>=8,<9",
-  "ruff>=0.9,<1",
-  "mypy>=1.14,<2",
-  "types-requests>=2.31",
-  "bandit>=1.8,<2",
-  "httpx>=0.27,<1",
-  "tomli>=2,<3; python_version < '3.11'",
-]
+web = ["fastapi>=0.110,<1", "uvicorn>=0.30,<1"]
+dev = ["pytest>=8,<9", "ruff>=0.9,<1", "mypy>=1.14,<2", "types-requests>=2.31", "bandit>=1.8,<2", "httpx>=0.27,<1", "tomli>=2,<3; python_version < '3.11'"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -45,8 +34,3 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
-
-[tool.mypy]
-python_version = "3.10"
-strict = true
-packages = ["blind_sqli"]
