@@ -66,5 +66,14 @@
 <aside id="drawer" class="drawer" aria-hidden="true"><button id="drawerClose" aria-label="Close">×</button><h2 id="drawerTitle">Details</h2><pre id="drawerBody"></pre></aside>
 <div id="toast" class="toast"></div>
 <script nonce="__NONCE__" src="/assets/app.js"></script>
+<script nonce="__NONCE__">
+const selectScanBase=selectScan;
+selectScan=async function(id){await selectScanBase(id);const snapshot=await(await api(`/api/scans/${id}/snapshot`)).json();for(const activity of snapshot.activities||[])state.activities.set(activity.id,activity);renderActivities()};
+const applyActivityBase=applyActivity;
+applyActivity=function(type,activity){if(activity&&activity.id&&!activity.started_at){const previous=state.activities.get(activity.id);activity={...activity,started_at:previous?.started_at||new Date().toISOString()}}applyActivityBase(type,activity)};
+const renderActivitiesBase=renderActivities;
+renderActivities=function(){const now=Date.now();for(const activity of state.activities.values())if(activity.status==="running"&&activity.started_at)activity.elapsed_seconds=Math.max(0,(now-Date.parse(activity.started_at))/1000);renderActivitiesBase()};
+setInterval(()=>{if(state.scanId)renderActivities()},500);
+</script>
 </body>
 </html>
