@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "imr-sqliblind"
-version = "0.5.1"
+version = "0.6.0"
 description = "Bounded blind SQL injection research helper with realtime visual sessions"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ license = {text = "MIT"}
 authors = [{name = "imr"}]
 
 [project.scripts]
-sqliblind = "blind_sqli.cli:main"
+sqliblind = "blind_sqli.entrypoint:main"
 
 [project.optional-dependencies]
 web = [
