@@ -2,7 +2,7 @@
 
 ```text
 imr-sqliblind
-imr :: v0.6.3
+imr :: v0.6.4
 ```
 
 `imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
@@ -21,11 +21,14 @@ The installed command is `sqliblind`. It provides a CLI, a realtime web console,
 - MySQL and SQLite blind extraction dialects.
 - Status, marker, regex, and response-length oracles.
 - Binary-search inference for counts, lengths, and characters.
-- Stable two-of-three character confirmation with bounded reinference after inconsistent responses.
+- Stable two-of-three character confirmation with bounded reinference.
 - Bounded concurrency with a shared request budget and global delay.
 - Schemas, tables, columns, bounded rows, and cells.
 - CLI activity monitor without misleading percentages.
 - Realtime FastAPI/Uvicorn web console using SSE.
+- Responsive web layout for desktop, tablets, and narrow mobile screens.
+- Interactive graph with draggable nodes, canvas panning, wheel zoom, fit, and reset.
+- Graph positions preserved while realtime entities and relationships arrive.
 - Authenticated remote HTTP access with optional TLS.
 - SQLite session history, pause, resume, stop, filters, and exports.
 - Unicode/ASCII trees, relations, Mermaid, JSON, and HTML reports.
@@ -85,7 +88,7 @@ Command:     %LOCALAPPDATA%\Programs\imr-sqliblind\bin\sqliblind.cmd
 
 ## Updating
 
-Check the installed and available versions without changing anything:
+Check versions without changing files:
 
 ```bash
 sqliblind update --check
@@ -107,7 +110,7 @@ sqliblind update --timeout 20
 sqliblind update --help
 ```
 
-The updater invokes the literal `git` command through `PATH`; it does not embed a Git executable path for any operating system or distribution. Repository commands run from the selected checkout instead of using a platform-specific Git location.
+The updater invokes the literal `git` command through `PATH`; it does not embed a Git executable path for an operating system or distribution.
 
 For a trusted checkout on a filesystem that Git reports as having dubious ownership, the updater passes a command-scoped option equivalent to:
 
@@ -115,7 +118,7 @@ For a trusted checkout on a filesystem that Git reports as having dubious owners
 git -c safe.directory=/absolute/checkout/path status --porcelain
 ```
 
-The `safe.directory` exception applies only to the individual updater command. The updater never runs `git config --global`, does not modify `~/.gitconfig`, still validates the official `origin`, refuses dirty worktrees, and updates `main` using fast-forward only.
+The `safe.directory` exception applies only to that updater command. The updater never runs `git config --global`, does not modify `~/.gitconfig`, validates the official `origin`, refuses dirty worktrees, and updates `main` using fast-forward only.
 
 Users upgrading from a version whose updater cannot access the checkout can update once from inside the clone:
 
@@ -173,9 +176,9 @@ sqliblind --json map
 
 ## Reliable character inference
 
-Each inferred character is confirmed with at least two independent equality probes. If the two probes disagree, a third probe decides by majority. If the candidate is rejected, the complete binary search for that character is restarted up to three times. Retry and recovery events are recorded as `inference.retry` and `inference.recovered`.
+Each inferred character is confirmed with at least two independent equality probes. If the probes disagree, a third probe decides by majority. If a candidate is rejected, the complete binary search for that character is restarted up to three times.
 
-This protects long-running maps from isolated status-code anomalies without disabling the global delay, request budget, TLS verification, or deterministic output ordering.
+Retry and recovery events are recorded as `inference.retry` and `inference.recovered`.
 
 ## Realtime web console
 
@@ -228,7 +231,34 @@ sqliblind web \
 
 Certificate and key options must be used together. When TLS is enabled, the console uses HTTPS and secure cookies.
 
-The browser displays current activities, schemas, tables, columns, rows, cells, relationships, a live SVG graph, raw events, session history, and a right-side details drawer.
+### Responsive frontend
+
+The web interface uses fluid grids and safe text wrapping so long URLs, entity names, activity details, raw events, and form fields do not overflow their panels.
+
+At narrower widths:
+
+- The sidebar becomes a full-width section above the workspace.
+- Multi-column forms collapse to one column.
+- Scan and export controls wrap instead of being clipped.
+- Tabs remain horizontally scrollable.
+- The details drawer becomes a full-screen mobile panel.
+- Activity cards, metrics, sessions, entities, and long raw values remain readable.
+
+### Interactive graph
+
+Open the **Graph** tab to use the dynamic relationship graph.
+
+- Drag any node with the mouse or a pointer device.
+- Drag empty canvas space to pan.
+- Use the mouse wheel or `+` and `−` controls to zoom.
+- Use **Fit** to center all visible nodes.
+- Use **Reset layout** to rebuild the hierarchy.
+- Node positions persist while realtime events add entities and relationships.
+- Filtering preserves ancestor context.
+- All matching entities are rendered; the previous 120-node frontend truncation was removed.
+- Long node names wrap across multiple SVG text lines instead of being cut.
+
+The browser also displays current activities, schemas, tables, columns, rows, cells, raw events, session history, filters, exports, and a right-side details drawer.
 
 ## Bounded row extraction
 
@@ -261,7 +291,7 @@ sqliblind map \
 sqliblind --workers 64 --delay 0.1 --max-requests 5000 map
 ```
 
-- Workers: 1–64.
+- Workers: 1–64 in the CLI.
 - One thread-local HTTP session per worker.
 - Shared global delay and request budget.
 - Deterministic output ordering.
@@ -284,7 +314,7 @@ sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.6.3" \
+  --header "User-Agent:imr-sqliblind/0.6.4" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
@@ -318,5 +348,7 @@ node --check src/blind_sqli/webui/app.js
 ruff check .
 bandit -q -r src
 ```
+
+Frontend regression checks cover required graph controls, overflow-safe CSS, mobile breakpoints, pointer interactions, persistent graph positions, full graph rendering, non-truncated labels, and valid JavaScript syntax.
 
 All testing must remain minimal and within an explicitly authorized scope. Automated unlimited database dumping is intentionally excluded.
