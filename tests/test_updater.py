@@ -19,16 +19,19 @@ class UpdaterTests(unittest.TestCase):
 
     def test_remote_version_check(self) -> None:
         response = Mock()
-        response.text = '__version__ = "0.7.0"\n'
+        response.text = '__version__ = "0.8.0"\n'
         response.raise_for_status.return_value = None
         with patch("blind_sqli.updater.requests.get", return_value=response):
-            self.assertEqual(updater.fetch_available_version(timeout=3), "0.7.0")
+            self.assertEqual(updater.fetch_available_version(timeout=3), "0.8.0")
 
     def test_check_reports_available_version(self) -> None:
-        with patch("blind_sqli.updater.fetch_available_version", return_value="0.7.0"):
+        with patch(
+            "blind_sqli.updater.fetch_available_version",
+            return_value="0.8.0",
+        ):
             status = updater.check_for_updates()
-        self.assertEqual(status.installed_version, "0.6.4")
-        self.assertEqual(status.available_version, "0.7.0")
+        self.assertEqual(status.installed_version, "0.7.0")
+        self.assertEqual(status.available_version, "0.8.0")
         self.assertTrue(status.update_available)
 
     def test_checkout_discovery(self) -> None:
@@ -38,7 +41,8 @@ class UpdaterTests(unittest.TestCase):
             (root / "src" / "blind_sqli").mkdir(parents=True)
             (root / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
             (root / "src" / "blind_sqli" / "__init__.py").write_text(
-                '__version__ = "0.6.4"\n', encoding="utf-8"
+                '__version__ = "0.7.0"\n',
+                encoding="utf-8",
             )
             with patch("blind_sqli.updater.Path.cwd", return_value=root):
                 self.assertEqual(updater.discover_source(), root.resolve())
@@ -59,7 +63,10 @@ class UpdaterTests(unittest.TestCase):
     def test_unexpected_remote_is_rejected(self) -> None:
         completed = Mock(stdout="https://example.invalid/fork.git\n")
         with patch("blind_sqli.updater._run", return_value=completed) as run:
-            with self.assertRaisesRegex(updater.UpdateError, "unexpected repository"):
+            with self.assertRaisesRegex(
+                updater.UpdateError,
+                "unexpected repository",
+            ):
                 updater._validate_remote(Path("/tmp/source"))
         command = run.call_args.args[0]
         self.assertEqual(command[0], "git")
@@ -73,7 +80,8 @@ class UpdaterTests(unittest.TestCase):
             (source / "src" / "blind_sqli").mkdir(parents=True)
             (source / "pyproject.toml").write_text("[project]\n", encoding="utf-8")
             (source / "src" / "blind_sqli" / "__init__.py").write_text(
-                '__version__ = "0.6.4"\n', encoding="utf-8"
+                '__version__ = "0.7.0"\n',
+                encoding="utf-8",
             )
             responses = [
                 Mock(stdout="git version 2.45.0\n"),
