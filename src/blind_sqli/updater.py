@@ -4,7 +4,6 @@ import argparse
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -21,6 +20,7 @@ VERSION_URL = (
     "https://raw.githubusercontent.com/IsdarlinM/imr-sqliblind/"
     "main/src/blind_sqli/__init__.py"
 )
+GIT_COMMAND = "git"
 _VERSION_PATTERN = re.compile(
     r'^__version__\s*=\s*["\'](\d+\.\d+\.\d+)["\']',
     re.MULTILINE,
@@ -162,9 +162,27 @@ def _normalize_remote(value: str) -> str:
     return normalized.casefold()
 
 
-def _validate_remote(source: Path, git: str) -> None:
+def _safe_directory_value(source: Path) -> str:
+    """Return a Git-compatible absolute path without changing global configuration."""
+
+    return source.expanduser().resolve().as_posix()
+
+
+def _repository_git_command(source: Path, *arguments: str) -> list[str]:
+    """Build a portable Git command scoped to one trusted checkout."""
+
+    return [
+        GIT_COMMAND,
+        "-c",
+        f"safe.directory={_safe_directory_value(source)}",
+        *arguments,
+    ]
+
+
+def _validate_remote(source: Path) -> None:
     remote = _run(
-        [git, "-C", str(source), "remote", "get-url", "origin"]
+        _repository_git_command(source, "remote", "get-url", "origin"),
+        cwd=source,
     ).stdout.strip()
     if _normalize_remote(remote) != _normalize_remote(REPOSITORY_URL):
         raise UpdateError(
@@ -173,9 +191,10 @@ def _validate_remote(source: Path, git: str) -> None:
         )
 
 
-def _ensure_clean(source: Path, git: str) -> None:
+def _ensure_clean(source: Path) -> None:
     status = _run(
-        [git, "-C", str(source), "status", "--porcelain"]
+        _repository_git_command(source, "status", "--porcelain"),
+        cwd=source,
     ).stdout.strip()
     if status:
         raise UpdateError(
@@ -185,9 +204,7 @@ def _ensure_clean(source: Path, git: str) -> None:
 
 
 def _prepare_source(source: Path | None) -> Path:
-    git = shutil.which("git")
-    if git is None:
-        raise UpdateError("git is required to install updates")
+    _run([GIT_COMMAND, "--version"])
     selected = source or (_default_home() / "source")
     selected = selected.expanduser().resolve()
     if selected.exists() and not _looks_like_checkout(selected):
@@ -198,7 +215,7 @@ def _prepare_source(source: Path | None) -> Path:
         selected.parent.mkdir(parents=True, exist_ok=True)
         _run(
             [
-                git,
+                GIT_COMMAND,
                 "clone",
                 "--branch",
                 "main",
@@ -207,11 +224,17 @@ def _prepare_source(source: Path | None) -> Path:
                 str(selected),
             ]
         )
-    _validate_remote(selected, git)
-    _ensure_clean(selected, git)
-    _run([git, "-C", str(selected), "fetch", "--prune", "origin", "main"])
-    _run([git, "-C", str(selected), "checkout", "main"])
-    _run([git, "-C", str(selected), "pull", "--ff-only", "origin", "main"])
+    _validate_remote(selected)
+    _ensure_clean(selected)
+    _run(
+        _repository_git_command(selected, "fetch", "--prune", "origin", "main"),
+        cwd=selected,
+    )
+    _run(_repository_git_command(selected, "checkout", "main"), cwd=selected)
+    _run(
+        _repository_git_command(selected, "pull", "--ff-only", "origin", "main"),
+        cwd=selected,
+    )
     return selected
 
 
@@ -343,6 +366,7 @@ def update_main(argv: Sequence[str] | None = None) -> int:
 
 
 __all__ = [
+    "GIT_COMMAND",
     "REPOSITORY_URL",
     "VERSION_URL",
     "UpdateError",
