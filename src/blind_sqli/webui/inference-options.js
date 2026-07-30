@@ -25,7 +25,7 @@ const COMPACT_GRAPH = Object.freeze({
     default: 14,
   }),
   labelLength: 18,
-  horizontalGap: 176,
+  horizontalGap: 14,
   verticalGap: 12,
   startX: 24,
   startY: 24,
@@ -73,50 +73,132 @@ graphNodeDimensions = function compactGraphNodeDimensions(entity) {
   };
 };
 
-layoutGraph = function compactLayoutGraph(entities, force = false) {
-  if (force) {
+function packedGraphOrder(entities) {
+  const byId = new Map(entities.map((entity) => [entity.id, entity]));
+  const childrenByParent = new Map();
+  const roots = [];
+
+  for (const entity of entities) {
+    if (!entity.parent_id || !byId.has(entity.parent_id)) {
+      roots.push(entity);
+      continue;
+    }
+    if (!childrenByParent.has(entity.parent_id)) {
+      childrenByParent.set(entity.parent_id, []);
+    }
+    childrenByParent.get(entity.parent_id).push(entity);
+  }
+
+  const compare = (left, right) =>
+    String(left.type).localeCompare(String(right.type)) ||
+    String(left.name).localeCompare(String(right.name));
+  roots.sort(compare);
+  for (const values of childrenByParent.values()) {
+    values.sort(compare);
+  }
+
+  const ordered = [];
+  const queue = [...roots];
+  const seen = new Set();
+  while (queue.length) {
+    const entity = queue.shift();
+    if (!entity || seen.has(entity.id)) {
+      continue;
+    }
+    seen.add(entity.id);
+    ordered.push(entity);
+    queue.push(...(childrenByParent.get(entity.id) || []));
+  }
+
+  for (const entity of [...entities].sort(compare)) {
+    if (!seen.has(entity.id)) {
+      ordered.push(entity);
+    }
+  }
+  return ordered;
+}
+
+function packedGraphColumns(count, cellWidth, cellHeight) {
+  if (count <= 1) {
+    return 1;
+  }
+  const viewport = graphViewportSize();
+  const aspect = viewport.width / Math.max(viewport.height, 1);
+  const balanced = Math.ceil(
+    Math.sqrt((count * aspect * cellHeight) / Math.max(cellWidth, 1)),
+  );
+  return Math.max(1, Math.min(count, balanced));
+}
+
+function rectanglesOverlap(left, right) {
+  return !(
+    left.x + left.width + COMPACT_GRAPH.horizontalGap <= right.x ||
+    right.x + right.width + COMPACT_GRAPH.horizontalGap <= left.x ||
+    left.y + left.height + COMPACT_GRAPH.verticalGap <= right.y ||
+    right.y + right.height + COMPACT_GRAPH.verticalGap <= left.y
+  );
+}
+
+layoutGraph = function packedLayoutGraph(entities, force = false) {
+  const preserveManualLayout = graphState.userTransformed && !force;
+  if (!preserveManualLayout) {
     graphState.positions.clear();
+  }
+  if (force) {
     graphState.dimensions.clear();
   }
 
-  const byId = new Map(entities.map((entity) => [entity.id, entity]));
-  const depthCache = new Map();
-  const columns = new Map();
-
-  for (const entity of entities) {
-    const dimensions = graphNodeDimensions(entity);
-    graphState.dimensions.set(entity.id, dimensions);
-    const depth = graphDepth(entity, byId, depthCache);
-    if (!columns.has(depth)) {
-      columns.set(depth, []);
-    }
-    columns.get(depth).push(entity);
+  const ordered = packedGraphOrder(entities);
+  for (const entity of ordered) {
+    graphState.dimensions.set(entity.id, graphNodeDimensions(entity));
   }
 
-  for (const [depth, column] of [...columns.entries()].sort(
-    ([left], [right]) => left - right,
-  )) {
-    column.sort(
-      (a, b) =>
-        String(a.type).localeCompare(String(b.type)) ||
-        String(a.name).localeCompare(String(b.name)),
-    );
-    let cursorY = COMPACT_GRAPH.startY;
-    for (const entity of column) {
+  const maximumWidth = Math.max(
+    1,
+    ...ordered.map((entity) => graphState.dimensions.get(entity.id).width),
+  );
+  const maximumHeight = Math.max(
+    1,
+    ...ordered.map((entity) => graphState.dimensions.get(entity.id).height),
+  );
+  const cellWidth = maximumWidth + COMPACT_GRAPH.horizontalGap;
+  const cellHeight = maximumHeight + COMPACT_GRAPH.verticalGap;
+  const columns = packedGraphColumns(ordered.length, cellWidth, cellHeight);
+  const occupied = [];
+
+  if (preserveManualLayout) {
+    for (const entity of ordered) {
+      const position = graphState.positions.get(entity.id);
       const dimensions = graphState.dimensions.get(entity.id);
-      const existing = graphState.positions.get(entity.id);
-      if (existing && !force) {
-        cursorY = Math.max(
-          cursorY,
-          existing.y + dimensions.height + COMPACT_GRAPH.verticalGap,
-        );
+      if (position && dimensions) {
+        occupied.push({ ...position, ...dimensions });
+      }
+    }
+  }
+
+  let nextSlot = 0;
+  for (const entity of ordered) {
+    if (preserveManualLayout && graphState.positions.has(entity.id)) {
+      continue;
+    }
+    const dimensions = graphState.dimensions.get(entity.id);
+    let placed = false;
+    while (!placed) {
+      const column = nextSlot % columns;
+      const row = Math.floor(nextSlot / columns);
+      nextSlot += 1;
+      const candidate = {
+        x: COMPACT_GRAPH.startX + column * cellWidth,
+        y: COMPACT_GRAPH.startY + row * cellHeight,
+        width: dimensions.width,
+        height: dimensions.height,
+      };
+      if (occupied.some((rectangle) => rectanglesOverlap(candidate, rectangle))) {
         continue;
       }
-      graphState.positions.set(entity.id, {
-        x: COMPACT_GRAPH.startX + depth * COMPACT_GRAPH.horizontalGap,
-        y: cursorY,
-      });
-      cursorY += dimensions.height + COMPACT_GRAPH.verticalGap;
+      graphState.positions.set(entity.id, { x: candidate.x, y: candidate.y });
+      occupied.push(candidate);
+      placed = true;
     }
   }
 
@@ -232,6 +314,29 @@ renderGraph = function renderCompactGraph() {
   }
 
   updateGraphEdges();
+};
+
+const baseRenderActivities = renderActivities;
+renderActivities = function renderOnlyActiveWorkers() {
+  const allActivities = state.activities;
+  const activeActivities = new Map(
+    [...allActivities.entries()].filter(
+      ([, activity]) => activity.status === "running",
+    ),
+  );
+  state.activities = activeActivities;
+  try {
+    baseRenderActivities();
+  } finally {
+    state.activities = allActivities;
+  }
+
+  if (!activeActivities.size) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No active workers.";
+    $("activityView").replaceChildren(empty);
+  }
 };
 
 if (state.activePane === "graph") {
