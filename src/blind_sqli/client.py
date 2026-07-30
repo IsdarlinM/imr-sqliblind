@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass, field
+from typing import cast
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import requests
@@ -96,7 +97,7 @@ class HttpClient:
         self._local = threading.local()
 
     def _session(self) -> Session:
-        session = getattr(self._local, "session", None)
+        session = cast(Session | None, getattr(self._local, "session", None))
         if session is None:
             session = requests.Session()
             session.headers.update(self.config.headers)
