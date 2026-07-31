@@ -5,6 +5,7 @@ from typing import Any
 
 from . import __version__
 from .manager import ScanManager, ScanSettings
+from .web_defaults import DefaultScanProfileStore
 from .web_support import (
     AUTH_COOKIE,
     CSRF_COOKIE,
@@ -45,6 +46,7 @@ def create_app(
         redoc_url=None,
         openapi_url=None,
     )
+    default_profiles = DefaultScanProfileStore(manager.store.path)
 
     class ScanRequest(BaseModel):
         url: str = Field(min_length=1, max_length=4096)
@@ -83,6 +85,9 @@ def create_app(
         adaptive_confirmation: bool = True
         adaptive_concurrency: bool = True
         request_event_sample: int = Field(default=20, ge=1, le=1000)
+
+    class DefaultScanRequest(ScanRequest):
+        url: str = Field(default="", max_length=4096)
 
     def authorized(request: Request) -> None:
         supplied = request.cookies.get(AUTH_COOKIE) or request.headers.get(
@@ -172,6 +177,24 @@ def create_app(
     @app.get("/api/health", dependencies=[Depends(authorized)])
     async def health() -> dict[str, object]:
         return {"status": "ok", "version": __version__}
+
+    @app.get(
+        "/api/settings/default-scan",
+        dependencies=[Depends(authorized)],
+    )
+    async def get_default_scan() -> dict[str, Any]:
+        return default_profiles.load()
+
+    @app.put(
+        "/api/settings/default-scan",
+        dependencies=[Depends(csrf_protected)],
+    )
+    async def save_default_scan(body: DefaultScanRequest) -> dict[str, Any]:
+        try:
+            raw = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+            return default_profiles.save(raw)
+        except (OSError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/api/scans", dependencies=[Depends(authorized)])
     async def list_scans() -> list[dict[str, Any]]:
