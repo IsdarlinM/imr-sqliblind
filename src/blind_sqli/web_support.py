@@ -58,7 +58,11 @@ def load_asset(name: str) -> str:
     content = _read_webui_file(name)
     companions = {
         "app.css": ["graph-interactions.css", "web-menu.css"],
-        "inference-options.js": ["graph-interactions.js", "web-menu.js"],
+        "inference-options.js": [
+            "graph-interactions.js",
+            "web-menu.js",
+            "web-menu-runtime.js",
+        ],
     }.get(name, [])
     for companion in companions:
         content = f"{content.rstrip()}\n\n{_read_webui_file(companion)}"
