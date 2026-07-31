@@ -1,0 +1,10 @@
+body:not(.web-menu-ready) .layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 370px) minmax(0, 1fr);
+}
+
+@media (max-width: 860px) {
+  body:not(.web-menu-ready) .layout {
+    grid-template-columns: 1fr;
+  }
+}
