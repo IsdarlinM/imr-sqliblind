@@ -170,18 +170,22 @@ if "%NO_PATH%"=="0" call :persist_environment || exit /b 1
 set "IMR_SQLIBLIND_HOME=%PREFIX%"
 set "SQLIBLIND_PYTHON=%VENV_PYTHON%"
 set "SQLIBLIND_BIN=%BIN_DIR%"
-set "PATH=%BIN_DIR%;%PATH%"
+call :activate_current_environment || exit /b 1
 
 echo [+] Verifying CLI, service config, and web console
-call "%BIN_DIR%\sqliblind.cmd" --version || exit /b 1
-call "%BIN_DIR%\sqliblind.cmd" config init >nul || exit /b 1
-call "%BIN_DIR%\sqliblind.cmd" web --help >nul || exit /b 1
+call sqliblind --version || exit /b 1
+call sqliblind config init >nul || exit /b 1
+call sqliblind web --help >nul || exit /b 1
 echo.
 echo Installation completed.
 echo   Home:    %PREFIX%
 echo   Python:  %VENV_PYTHON%
 echo   Command: %BIN_DIR%\sqliblind.cmd
-if "%NO_PATH%"=="0" echo Open a new CMD window before using sqliblind globally.
+if "%NO_PATH%"=="0" (
+  echo.
+  echo PATH and user environment variables were configured automatically.
+  echo Open a new CMD or PowerShell window to inherit the persisted PATH.
+)
 exit /b 0
 
 :install_uv
@@ -215,7 +219,16 @@ exit /b 0
 set "SQLIBLIND_ENV_HOME=%PREFIX%"
 set "SQLIBLIND_ENV_PYTHON=%VENV_PYTHON%"
 set "SQLIBLIND_ENV_BIN=%BIN_DIR%"
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $homePath=$env:SQLIBLIND_ENV_HOME; $pythonPath=$env:SQLIBLIND_ENV_PYTHON; $bin=$env:SQLIBLIND_ENV_BIN; [Environment]::SetEnvironmentVariable('IMR_SQLIBLIND_HOME',$homePath,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_PYTHON',$pythonPath,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_BIN',$bin,'User'); $current=[Environment]::GetEnvironmentVariable('Path','User'); $items=@(); if($current){ foreach($item in $current.Split(';')){ if($item -and $item.TrimEnd('\') -ine $bin.TrimEnd('\')){ $items += $item } } }; $items += $bin; [Environment]::SetEnvironmentVariable('Path',($items -join ';'),'User')" || exit /b 1
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $homePath=$env:SQLIBLIND_ENV_HOME; $pythonPath=$env:SQLIBLIND_ENV_PYTHON; $bin=$env:SQLIBLIND_ENV_BIN; [Environment]::SetEnvironmentVariable('IMR_SQLIBLIND_HOME',$homePath,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_PYTHON',$pythonPath,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_BIN',$bin,'User'); $current=[Environment]::GetEnvironmentVariable('Path','User'); $items=@(); if($current){ foreach($item in $current.Split(';')){ if($item -and $item.TrimEnd('\') -ine $bin.TrimEnd('\')){ $items += $item } } }; $items += $bin; [Environment]::SetEnvironmentVariable('Path',($items -join ';'),'User'); $persisted=[Environment]::GetEnvironmentVariable('Path','User').Split(';'); $found=$false; foreach($item in $persisted){ if($item -and $item.TrimEnd('\') -ieq $bin.TrimEnd('\')){ $found=$true } }; if(-not $found){ throw 'The sqliblind bin directory was not persisted in the user PATH' }" || exit /b 1
+exit /b 0
+
+:activate_current_environment
+set "PATH=%BIN_DIR%;%PATH%"
+where /Q sqliblind
+if errorlevel 1 (
+  echo [x] sqliblind is still unavailable after updating PATH 1>&2
+  exit /b 1
+)
 exit /b 0
 
 :mkdir_failed
