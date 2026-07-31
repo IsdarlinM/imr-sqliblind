@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
@@ -19,6 +20,8 @@ from blind_sqli.terminal import (
     is_machine_output,
     terminal_session,
 )
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
 class TtyBuffer(io.StringIO):
@@ -79,15 +82,10 @@ class TerminalPresentationTests(unittest.TestCase):
         source = "Error: controlled failure\n"
         written = stream.write(source)
         rendered = destination.getvalue()
-        plain = (
-            rendered.replace(RED, "")
-            .replace("\x1b[1m", "")
-            .replace(RESET, "")
-        )
         self.assertEqual(written, len(source))
         self.assertIn(RED, rendered)
         self.assertIn(RESET, rendered)
-        self.assertEqual(plain, source)
+        self.assertEqual(_ANSI.sub("", rendered), source)
 
     def test_forced_color_and_banner_are_rendered_in_a_tty(self) -> None:
         stdout = TtyBuffer()
@@ -120,10 +118,11 @@ class TerminalPresentationTests(unittest.TestCase):
         with redirect_stdout(stdout), redirect_stderr(stderr):
             result = main(["--color", "always", "--help"])
         rendered = stdout.getvalue()
+        plain = _ANSI.sub("", rendered)
         self.assertEqual(result, 0)
-        self.assertIn("Blind SQL Injection", rendered)
-        self.assertIn("--color auto", rendered)
-        self.assertIn("--no-banner", rendered)
+        self.assertIn("Blind SQL Injection", plain)
+        self.assertIn("--color auto", plain)
+        self.assertIn("--no-banner", plain)
         self.assertIn("\x1b[", rendered)
 
     def test_no_banner_option_keeps_help_available(self) -> None:
