@@ -2,12 +2,12 @@
 
 ```text
 imr-sqliblind
-imr :: v0.7.0
+imr :: v0.8.0
 ```
 
 `imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
 
-The installed command is `sqliblind`. It provides a CLI, a realtime web console, persistent sessions, bounded concurrency, structured exports, and a secure self-update command.
+The installed command is `sqliblind`. It provides a CLI, a realtime web console, an authenticated background service, persistent scan sessions, managed users, bounded concurrency, structured exports, and a secure self-update command.
 
 ## Requirements
 
@@ -20,23 +20,20 @@ The installed command is `sqliblind`. It provides a CLI, a realtime web console,
 
 - MySQL and SQLite blind extraction dialects.
 - Status, marker, regex, and response-length oracles.
-- Sentinel binary search for bounded counts and lengths without a separate overflow probe.
-- Adaptive character inference using weighted numeric partitions with exact fallback.
-- Optional globally scheduled bitwise inference and compatibility binary mode.
+- Adaptive, binary, and globally scheduled bitwise character inference.
 - Character-position scheduling across all workers, including a single entity.
-- Adaptive equality confirmation with noise-aware two-of-three fallback only when required.
-- AIMD concurrency control, shared request budget, and global delay.
+- AIMD concurrency control, shared request budget, global delay, and bounded extraction.
 - Pipelined schema → table → column discovery.
-- Batched SQLite event persistence with sampled raw request events.
 - Schemas, tables, columns, bounded rows, and cells.
 - CLI activity monitor without misleading percentages.
 - Realtime FastAPI/Uvicorn web console using SSE.
-- Responsive web layout for desktop, tablets, and narrow mobile screens.
-- Interactive graph with draggable nodes, canvas panning, wheel zoom, fit, and reset.
-- Graph positions preserved while realtime entities and relationships arrive.
-- Authenticated remote HTTP access with optional TLS.
-- SQLite session history, pause, resume, stop, filters, and exports.
-- Unicode/ASCII trees, relations, Mermaid, JSON, and HTML reports.
+- Detached user-level service controlled with `start`, `stop`, `restart`, and `status`.
+- Persistent service configuration with an unusual local default port (`43127`).
+- SQLite-backed users, roles, temporary-account expiration, session revocation, and audit events.
+- Mandatory replacement of the bootstrap `admin:admin` password.
+- Responsive web layout and interactive circular relationship graph.
+- SQLite scan history, pause, resume, stop, filters, exports, and saved defaults.
+- Unicode/ASCII trees, relations, tables, Mermaid, JSON, and HTML reports.
 - Sensitive-looking values masked by default.
 - TLS validation enabled and redirects disabled by default for target requests.
 - Native user-level installers for POSIX systems and Windows.
@@ -91,6 +88,141 @@ Application: %LOCALAPPDATA%\Programs\imr-sqliblind
 Command:     %LOCALAPPDATA%\Programs\imr-sqliblind\bin\sqliblind.cmd
 ```
 
+## Quick start: authenticated background service
+
+Start the web console as a detached user-level service:
+
+```bash
+sqliblind start
+sqliblind status
+```
+
+Open:
+
+```text
+http://127.0.0.1:43127/
+```
+
+On the first start, the empty user database receives this bootstrap account:
+
+```text
+Username: admin
+Password: admin
+```
+
+The account is marked for a mandatory password change. The console and API remain unavailable to that account until the password has been replaced.
+
+Control the process:
+
+```bash
+sqliblind stop
+sqliblind restart
+sqliblind status
+```
+
+Override the saved host or port for one launch:
+
+```bash
+sqliblind start --port 43128
+sqliblind restart --host 127.0.0.1 --port 43129
+```
+
+Run in the foreground for diagnostics:
+
+```bash
+sqliblind start --foreground
+```
+
+The service is user-level and does not require root or Administrator privileges. It starts a detached Python/Uvicorn process, records user-owned state, and uses a random control token for authenticated graceful shutdown instead of terminating an unverified PID.
+
+## User management
+
+Three roles are available:
+
+- `admin`: manage users and defaults, inspect audit events, and operate scans.
+- `operator`: create, pause, resume, and stop scans; read sessions and exports.
+- `viewer`: read the console, graph, tables, events, sessions, and exports.
+
+Create users:
+
+```bash
+sqliblind users create analyst --role operator
+sqliblind users create auditor --role viewer
+sqliblind users create backup-admin --role admin
+```
+
+Create temporary accounts:
+
+```bash
+sqliblind users create contractor --role operator --expires-in 12h
+sqliblind users create reviewer --role viewer --expires-in 7d
+```
+
+Supported relative durations are minutes, hours, days, and weeks: `30m`, `12h`, `7d`, and `2w`.
+
+Manage existing accounts:
+
+```bash
+sqliblind users list
+sqliblind users passwd analyst
+sqliblind users role analyst viewer
+sqliblind users disable analyst
+sqliblind users enable analyst
+sqliblind users expire analyst --in 24h
+sqliblind users expire analyst --never
+sqliblind users delete analyst
+sqliblind users audit --limit 100
+```
+
+Passwords are prompted without echo. For controlled automation, `--password-stdin` accepts one password line; there is intentionally no `--password` argument that could expose a secret in shell history or process listings.
+
+```bash
+printf '%s\n' 'Strong-Temporary-Password9' | \
+  sqliblind users create ci-operator \
+  --role operator \
+  --expires-in 2h \
+  --password-stdin
+```
+
+Password, role, activation, and expiration changes revoke existing sessions. The store prevents deletion, disabling, demotion, or temporary expiration of the last usable administrator.
+
+See [Authenticated background service and user management](docs/service-and-users.md) for the complete command, storage, remote-access, and security reference.
+
+## Service configuration
+
+Create or display the default JSON configuration:
+
+```bash
+sqliblind config init
+sqliblind config show
+```
+
+Persistent defaults can be changed without editing JSON manually:
+
+```bash
+sqliblind config set --port 43128
+sqliblind config set --session-hours 8
+sqliblind config set --workspace /srv/sqliblind/workspaces
+sqliblind config set --log-file /var/log/sqliblind/service.log
+```
+
+Default configuration paths:
+
+```text
+Windows: %LOCALAPPDATA%\Programs\imr-sqliblind\config\service.json
+POSIX:   ~/.local/share/imr-sqliblind/config/service.json
+```
+
+The file stores the bind host, port, remote-access policy, TLS files, session lifetime, workspace, authentication database, log file, and state file. Writes use an atomic replace; POSIX files receive user-only permissions where supported.
+
+Use another configuration file:
+
+```bash
+sqliblind start --config ./service.json
+sqliblind users --config ./service.json list
+sqliblind config --config ./service.json show
+```
+
 ## Updating
 
 Check versions without changing files:
@@ -115,23 +247,7 @@ sqliblind update --timeout 20
 sqliblind update --help
 ```
 
-The updater invokes the literal `git` command through `PATH`; it does not embed a Git executable path for an operating system or distribution.
-
-For a trusted checkout on a filesystem that Git reports as having dubious ownership, the updater passes a command-scoped option equivalent to:
-
-```bash
-git -c safe.directory=/absolute/checkout/path status --porcelain
-```
-
-The `safe.directory` exception applies only to that updater command. The updater never runs `git config --global`, does not modify `~/.gitconfig`, validates the official `origin`, refuses dirty worktrees, and updates `main` using fast-forward only.
-
-Users upgrading from a version whose updater cannot access the checkout can update once from inside the clone:
-
-```bash
-git -c safe.directory="$(pwd -P)" checkout main
-git -c safe.directory="$(pwd -P)" pull --ff-only origin main
-./install.sh
-```
+The updater validates the official origin, refuses dirty worktrees, updates `main` using fast-forward only, and never modifies global Git configuration. Updates and reinstalls preserve the application data root, including service configuration, users, audit events, workspaces, and logs.
 
 ## CLI usage
 
@@ -171,17 +287,12 @@ sqliblind --workers 8 map
 sqliblind --progress live map
 sqliblind --progress plain map
 sqliblind --progress off map
-```
-
-JSON output remains machine-readable:
-
-```bash
 sqliblind --json map
 ```
 
 ## Optimized exact inference
 
-The default `adaptive` mode partitions the configured numeric character-code range using identifier-oriented probabilities learned during the current scan. It does not use wordlists and it never removes uppercase, lowercase, digits, punctuation, `%`, or `_` from the configured range.
+The default `adaptive` mode partitions the configured numeric character-code range using identifier-oriented probabilities learned during the current scan. It does not use wordlists and it preserves uppercase, lowercase, digits, punctuation, `%`, and `_`.
 
 Character conditions use numeric comparisons only:
 
@@ -191,7 +302,7 @@ Character conditions use numeric comparisons only:
 (code_expression) IN (37,48,65,95,97)
 ```
 
-`%` is inferred as code `37` and `_` as code `95`. They are never inserted into a `LIKE` pattern, so neither character can act as a wildcard during character discovery. The SQLite catalog query `name NOT LIKE 'sqlite_%'` remains limited to excluding internal SQLite tables and is unrelated to character inference.
+`%` is inferred as code `37` and `_` as code `95`; neither is inserted into a `LIKE` pattern during character discovery.
 
 Available modes:
 
@@ -201,34 +312,19 @@ sqliblind --inference-mode bitwise --workers 8 map
 sqliblind --inference-mode binary --workers 8 map
 ```
 
-- `adaptive`: weighted numeric partitions, online character-frequency learning, one normal equality confirmation, and robust majority fallback only after inconsistency.
-- `bitwise`: globally schedules independent code bits across workers, then confirms the reconstructed code.
-- `binary`: compatibility mode using a fast numeric binary search and adaptive fallback.
+Use `--serial-characters` only for diagnostics. `--fixed-concurrency` disables AIMD backoff when fixed request concurrency is required.
 
-Use `--serial-characters` only for diagnostics. By default, positions from one or many entities share the same worker pool. `--fixed-concurrency` disables AIMD backoff when a strictly fixed request concurrency is required. Adaptive concurrency begins at the configured worker ceiling, halves on HTTP 429 or transport failures, and recovers additively after stable responses.
-
-### Reproducible simulated benchmark
-
-Run:
+Run the deterministic simulator:
 
 ```bash
 python benchmarks/inference_benchmark.py --latency 0.003 --workers 8
 ```
 
-For `User_Profile_50%_2026` with a simulated 3 ms oracle, the development benchmark produced:
+Benchmark figures are laboratory measurements, not guarantees for remote targets.
 
-| Mode | Workers | Requests | Elapsed |
-|---|---:|---:|---:|
-| Legacy estimate | 1 | 240 | 0.7200 s |
-| Binary optimized | 8 | 172 | ~0.11 s |
-| Adaptive | 8 | 154 | ~0.10 s |
-| Bitwise | 8 | 175 | ~0.10 s |
+## Direct web-console mode
 
-These are deterministic laboratory measurements from the included simulator, not a promise for remote targets. Real performance depends on target latency, configured delay, rate limits, oracle noise, and server capacity.
-
-## Realtime web console
-
-Start locally:
+The original foreground token-authenticated web command remains available:
 
 ```bash
 sqliblind web
@@ -249,9 +345,7 @@ sqliblind web --workspace "$HOME/sqliblind-workspaces"
 sqliblind web --no-open-browser
 ```
 
-### Remote HTTP access
-
-Remote HTTP access requires an explicit non-loopback opt-in and a token, but it does not require a TLS certificate:
+Remote direct mode requires an explicit opt-in and token:
 
 ```bash
 sqliblind web \
@@ -260,11 +354,7 @@ sqliblind web \
   --token "a-long-random-token"
 ```
 
-The console starts at `http://HOST:8088`. A warning is printed because the token, session metadata, and scan results are not encrypted in transit. Use this mode only on a trusted local network.
-
-### Optional remote HTTPS
-
-TLS remains available by supplying both certificate files:
+Optional HTTPS requires both certificate files:
 
 ```bash
 sqliblind web \
@@ -275,36 +365,39 @@ sqliblind web \
   --ssl-keyfile server.key
 ```
 
-Certificate and key options must be used together. When TLS is enabled, the console uses HTTPS and secure cookies.
+Remote HTTP is unencrypted. Prefer the authenticated service with TLS for persistent remote use.
 
-### Responsive frontend
+## Remote service access
 
-The web interface uses fluid grids and safe text wrapping so long URLs, entity names, activity details, raw events, and form fields do not overflow their panels.
+The service binds to `127.0.0.1` by default. Remote binding requires an explicit persistent opt-in:
 
-At narrower widths:
+```bash
+sqliblind config set --host 0.0.0.0 --allow-remote
+```
 
-- The sidebar becomes a full-width section above the workspace.
-- Multi-column forms collapse to one column.
-- Scan and export controls wrap instead of being clipped.
-- Tabs remain horizontally scrollable.
-- The details drawer becomes a full-screen mobile panel.
-- Activity cards, metrics, sessions, entities, and long raw values remain readable.
+Remote HTTP exposes credentials, cookies, metadata, and scan results to the network path. Prefer TLS:
 
-### Interactive graph
+```bash
+sqliblind config set \
+  --host 0.0.0.0 \
+  --allow-remote \
+  --ssl-certfile /path/server.crt \
+  --ssl-keyfile /path/server.key
+sqliblind restart
+```
 
-Open the **Graph** tab to use the dynamic relationship graph.
+Certificate and key must both exist. Authentication cookies are marked `Secure` when TLS is enabled.
 
-- Drag any node with the mouse or a pointer device.
-- Drag empty canvas space to pan.
-- Use the mouse wheel or `+` and `−` controls to zoom.
-- Use **Fit** to center all visible nodes.
-- Use **Reset layout** to rebuild the hierarchy.
-- Node positions persist while realtime events add entities and relationships.
-- Filtering preserves ancestor context.
-- All matching entities are rendered; the previous 120-node frontend truncation was removed.
-- Long node names wrap across multiple SVG text lines instead of being cut.
+## Realtime frontend
 
-The browser also displays current activities, schemas, tables, columns, rows, cells, raw events, session history, filters, exports, and a right-side details drawer.
+The responsive console includes:
+
+- A hamburger menu for sessions, saved defaults, and temporary custom scans.
+- Live worker activity and SSE updates.
+- Compact circular graph nodes with dragging, pan, zoom, fit, reset, and relationship highlighting.
+- Native table views and bounded text/HTML table exports.
+- Filters, raw events, session history, and a right-side detail drawer.
+- Mobile layouts with safe wrapping and full-screen detail panels.
 
 ## Bounded row extraction
 
@@ -327,11 +420,24 @@ sqliblind map \
   --include-data \
   --data-table level5.photos \
   --max-rows 5 \
-  --format html \
+  --format html-tables \
   --output reports/full-map.html
 ```
 
-## Concurrency and safety
+## Authentication and service security
+
+- Passwords use PBKDF2-HMAC-SHA-256 with unique random salts and 310,000 iterations.
+- Password verification uses constant-time digest comparison.
+- Browser sessions use random 256-bit tokens; only token hashes are stored.
+- User and session expiration are verified on every request.
+- Mutating browser requests require CSRF validation.
+- Login errors do not reveal whether a username exists and repeated failures are rate-limited.
+- The internal legacy token is generated at runtime and is not accepted from external clients.
+- User and account-management actions are written to an audit table without passwords or session tokens.
+- Remote binding is rejected unless `allow_remote` is explicitly enabled.
+- Service stop performs an authenticated graceful shutdown.
+
+## Concurrency and target safety
 
 ```bash
 sqliblind --workers 64 --delay 0.1 --max-requests 5000 map
@@ -341,14 +447,10 @@ sqliblind --workers 64 --delay 0.1 --max-requests 5000 map
 - One thread-local HTTP session per worker.
 - Shared global delay and request budget.
 - Deterministic output ordering.
-- Adaptive single confirmation with majority fallback only after inconsistency.
-- Character positions are scheduled globally instead of serially per entity.
-- HTTP concurrency starts at the configured ceiling and backs off only after HTTP 429 or network failures.
-- Web events are committed in short transactions; raw request events are sampled while exact counters are retained.
 - Cooperative pause, resume, and cancellation.
-- Pending futures cancelled after failures.
 - TLS validation enabled unless `--insecure` is explicitly supplied.
 - Redirects are not followed.
+- Automated unlimited database dumping is intentionally excluded.
 
 ## Oracle modes
 
@@ -363,7 +465,7 @@ sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.7.0" \
+  --header "User-Agent:imr-sqliblind/0.8.0" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
@@ -400,6 +502,6 @@ ruff check .
 bandit -q -r src
 ```
 
-Frontend regression checks cover required graph controls, overflow-safe CSS, mobile breakpoints, pointer interactions, persistent graph positions, full graph rendering, non-truncated labels, and valid JavaScript syntax.
+Service regression coverage includes user bootstrap, password hashing and changes, role enforcement, expiration, last-admin protection, persistent configuration, entrypoint routing, login, CSRF, account APIs, authenticated service control, and detached start/status/stop behavior.
 
-All testing must remain minimal and within an explicitly authorized scope. Automated unlimited database dumping is intentionally excluded.
+All testing and target interaction must remain minimal and within an explicitly authorized scope.
