@@ -56,10 +56,10 @@ def load_asset(name: str) -> str:
     if name not in {"app.css", "app.js", "inference-options.js"}:
         raise ValueError("unsupported web asset")
     content = _read_webui_file(name)
-    companion = {
-        "app.css": "graph-interactions.css",
-        "inference-options.js": "graph-interactions.js",
-    }.get(name)
-    if companion:
+    companions = {
+        "app.css": ["graph-interactions.css", "web-menu.css"],
+        "inference-options.js": ["graph-interactions.js", "web-menu.js"],
+    }.get(name, [])
+    for companion in companions:
         content = f"{content.rstrip()}\n\n{_read_webui_file(companion)}"
     return content
