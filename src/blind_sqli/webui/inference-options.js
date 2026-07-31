@@ -29,7 +29,20 @@ const COMPACT_GRAPH = Object.freeze({
   verticalGap: 12,
   startX: 24,
   startY: 24,
+  density: 1.45,
+  randomAttempts: 180,
+  simulationMilliseconds: 950,
 });
+
+const dynamicGraphState = {
+  knownIds: new Set(),
+  velocities: new Map(),
+  pendingMotion: false,
+  movableIds: new Set(),
+  animationFrame: null,
+  animationStartedAt: 0,
+  lastFrameAt: 0,
+};
 
 function compactGraphRadius(type) {
   return COMPACT_GRAPH.radii[type] || COMPACT_GRAPH.radii.default;
@@ -73,143 +86,208 @@ graphNodeDimensions = function compactGraphNodeDimensions(entity) {
   };
 };
 
-function packedGraphOrder(entities) {
-  const byId = new Map(entities.map((entity) => [entity.id, entity]));
-  const childrenByParent = new Map();
-  const roots = [];
-
-  for (const entity of entities) {
-    if (!entity.parent_id || !byId.has(entity.parent_id)) {
-      roots.push(entity);
-      continue;
-    }
-    if (!childrenByParent.has(entity.parent_id)) {
-      childrenByParent.set(entity.parent_id, []);
-    }
-    childrenByParent.get(entity.parent_id).push(entity);
-  }
-
-  const compare = (left, right) =>
-    String(left.type).localeCompare(String(right.type)) ||
-    String(left.name).localeCompare(String(right.name));
-  roots.sort(compare);
-  for (const values of childrenByParent.values()) {
-    values.sort(compare);
-  }
-
-  const ordered = [];
-  const queue = [...roots];
-  const seen = new Set();
-  while (queue.length) {
-    const entity = queue.shift();
-    if (!entity || seen.has(entity.id)) {
-      continue;
-    }
-    seen.add(entity.id);
-    ordered.push(entity);
-    queue.push(...(childrenByParent.get(entity.id) || []));
-  }
-
-  for (const entity of [...entities].sort(compare)) {
-    if (!seen.has(entity.id)) {
-      ordered.push(entity);
-    }
-  }
-  return ordered;
-}
-
-function packedGraphColumns(count, cellWidth, cellHeight) {
-  if (count <= 1) {
-    return 1;
-  }
-  const viewport = graphViewportSize();
-  const aspect = viewport.width / Math.max(viewport.height, 1);
-  const balanced = Math.ceil(
-    Math.sqrt((count * aspect * cellHeight) / Math.max(cellWidth, 1)),
-  );
-  return Math.max(1, Math.min(count, balanced));
-}
-
-function rectanglesOverlap(left, right) {
+function rectanglesOverlap(left, right, gapX = 0, gapY = 0) {
   return !(
-    left.x + left.width + COMPACT_GRAPH.horizontalGap <= right.x ||
-    right.x + right.width + COMPACT_GRAPH.horizontalGap <= left.x ||
-    left.y + left.height + COMPACT_GRAPH.verticalGap <= right.y ||
-    right.y + right.height + COMPACT_GRAPH.verticalGap <= left.y
+    left.x + left.width + gapX <= right.x ||
+    right.x + right.width + gapX <= left.x ||
+    left.y + left.height + gapY <= right.y ||
+    right.y + right.height + gapY <= left.y
   );
 }
 
-layoutGraph = function packedLayoutGraph(entities, force = false) {
-  const preserveManualLayout = graphState.userTransformed && !force;
-  if (!preserveManualLayout) {
-    graphState.positions.clear();
+function dynamicGraphBounds(entities) {
+  const viewport = graphViewportSize();
+  const dimensions = entities.map((entity) =>
+    graphState.dimensions.get(entity.id),
+  );
+  const occupiedArea = dimensions.reduce(
+    (total, item) =>
+      total +
+      (item.width + COMPACT_GRAPH.horizontalGap) *
+        (item.height + COMPACT_GRAPH.verticalGap),
+    0,
+  );
+  const aspect = viewport.width / Math.max(viewport.height, 1);
+  const requiredArea = Math.max(
+    viewport.width * viewport.height * 0.78,
+    occupiedArea * COMPACT_GRAPH.density,
+  );
+  const width = Math.max(
+    viewport.width - COMPACT_GRAPH.startX * 2,
+    Math.sqrt(requiredArea * aspect),
+  );
+  const height = Math.max(
+    viewport.height - COMPACT_GRAPH.startY * 2,
+    requiredArea / Math.max(width, 1),
+  );
+  return {
+    x: COMPACT_GRAPH.startX,
+    y: COMPACT_GRAPH.startY,
+    width,
+    height,
+  };
+}
+
+function randomGraphCandidate(bounds, dimensions, randomSource = Math.random) {
+  const availableWidth = Math.max(1, bounds.width - dimensions.width);
+  const availableHeight = Math.max(1, bounds.height - dimensions.height);
+  return {
+    x: bounds.x + randomSource() * availableWidth,
+    y: bounds.y + randomSource() * availableHeight,
+    width: dimensions.width,
+    height: dimensions.height,
+  };
+}
+
+function randomAvailableGraphPosition(
+  dimensions,
+  occupied,
+  initialBounds,
+  randomSource = Math.random,
+) {
+  const bounds = { ...initialBounds };
+  for (let expansion = 0; expansion < 7; expansion += 1) {
+    for (let attempt = 0; attempt < COMPACT_GRAPH.randomAttempts; attempt += 1) {
+      const candidate = randomGraphCandidate(
+        bounds,
+        dimensions,
+        randomSource,
+      );
+      const collision = occupied.some((rectangle) =>
+        rectanglesOverlap(
+          candidate,
+          rectangle,
+          COMPACT_GRAPH.horizontalGap,
+          COMPACT_GRAPH.verticalGap,
+        ),
+      );
+      if (!collision) {
+        return {
+          x: candidate.x,
+          y: candidate.y,
+          bounds,
+        };
+      }
+    }
+    bounds.width *= 1.22;
+    bounds.height *= 1.22;
   }
+
+  const slot = occupied.length;
+  const columns = Math.max(1, Math.ceil(Math.sqrt(slot + 1)));
+  return {
+    x:
+      bounds.x +
+      (slot % columns) *
+        (dimensions.width + COMPACT_GRAPH.horizontalGap),
+    y:
+      bounds.y +
+      Math.floor(slot / columns) *
+        (dimensions.height + COMPACT_GRAPH.verticalGap),
+    bounds,
+  };
+}
+
+function stopDynamicGraphMotion() {
+  if (dynamicGraphState.animationFrame !== null) {
+    cancelAnimationFrame(dynamicGraphState.animationFrame);
+    dynamicGraphState.animationFrame = null;
+  }
+}
+
+const baseResetGraph = resetGraph;
+resetGraph = function resetDynamicGraph() {
+  stopDynamicGraphMotion();
+  dynamicGraphState.knownIds.clear();
+  dynamicGraphState.velocities.clear();
+  dynamicGraphState.pendingMotion = false;
+  dynamicGraphState.movableIds.clear();
+  baseResetGraph();
+};
+
+layoutGraph = function randomAvailableLayoutGraph(entities, force = false) {
   if (force) {
+    stopDynamicGraphMotion();
+    graphState.positions.clear();
     graphState.dimensions.clear();
-  }
-
-  const ordered = packedGraphOrder(entities);
-  for (const entity of ordered) {
-    graphState.dimensions.set(entity.id, graphNodeDimensions(entity));
-  }
-
-  const maximumWidth = Math.max(
-    1,
-    ...ordered.map((entity) => graphState.dimensions.get(entity.id).width),
-  );
-  const maximumHeight = Math.max(
-    1,
-    ...ordered.map((entity) => graphState.dimensions.get(entity.id).height),
-  );
-  const cellWidth = maximumWidth + COMPACT_GRAPH.horizontalGap;
-  const cellHeight = maximumHeight + COMPACT_GRAPH.verticalGap;
-  const columns = packedGraphColumns(ordered.length, cellWidth, cellHeight);
-  const occupied = [];
-
-  if (preserveManualLayout) {
-    for (const entity of ordered) {
-      const position = graphState.positions.get(entity.id);
-      const dimensions = graphState.dimensions.get(entity.id);
-      if (position && dimensions) {
-        occupied.push({ ...position, ...dimensions });
-      }
-    }
-  }
-
-  let nextSlot = 0;
-  for (const entity of ordered) {
-    if (preserveManualLayout && graphState.positions.has(entity.id)) {
-      continue;
-    }
-    const dimensions = graphState.dimensions.get(entity.id);
-    let placed = false;
-    while (!placed) {
-      const column = nextSlot % columns;
-      const row = Math.floor(nextSlot / columns);
-      nextSlot += 1;
-      const candidate = {
-        x: COMPACT_GRAPH.startX + column * cellWidth,
-        y: COMPACT_GRAPH.startY + row * cellHeight,
-        width: dimensions.width,
-        height: dimensions.height,
-      };
-      if (occupied.some((rectangle) => rectanglesOverlap(candidate, rectangle))) {
-        continue;
-      }
-      graphState.positions.set(entity.id, { x: candidate.x, y: candidate.y });
-      occupied.push(candidate);
-      placed = true;
-    }
+    dynamicGraphState.knownIds.clear();
+    dynamicGraphState.velocities.clear();
   }
 
   const visibleIds = new Set(entities.map((entity) => entity.id));
+  for (const entity of entities) {
+    graphState.dimensions.set(entity.id, graphNodeDimensions(entity));
+  }
+
+  for (const id of [...dynamicGraphState.knownIds]) {
+    if (!state.entities.has(id)) {
+      dynamicGraphState.knownIds.delete(id);
+      dynamicGraphState.velocities.delete(id);
+      graphState.positions.delete(id);
+      graphState.dimensions.delete(id);
+    }
+  }
+
+  const bounds = dynamicGraphBounds(entities);
+  const occupied = [];
+  for (const entity of entities) {
+    const position = graphState.positions.get(entity.id);
+    const dimensions = graphState.dimensions.get(entity.id);
+    if (position && dimensions && dynamicGraphState.knownIds.has(entity.id)) {
+      occupied.push({ ...position, ...dimensions, id: entity.id });
+    }
+  }
+
+  const newIds = new Set();
+  const shuffled = [...entities].sort(() => Math.random() - 0.5);
+  for (const entity of shuffled) {
+    if (
+      dynamicGraphState.knownIds.has(entity.id) &&
+      graphState.positions.has(entity.id)
+    ) {
+      continue;
+    }
+    const dimensions = graphState.dimensions.get(entity.id);
+    const placement = randomAvailableGraphPosition(
+      dimensions,
+      occupied,
+      bounds,
+    );
+    graphState.positions.set(entity.id, {
+      x: placement.x,
+      y: placement.y,
+    });
+    occupied.push({
+      x: placement.x,
+      y: placement.y,
+      width: dimensions.width,
+      height: dimensions.height,
+      id: entity.id,
+    });
+    dynamicGraphState.knownIds.add(entity.id);
+    dynamicGraphState.velocities.set(entity.id, {
+      x: (Math.random() - 0.5) * 1.6,
+      y: (Math.random() - 0.5) * 1.6,
+    });
+    newIds.add(entity.id);
+  }
+
   for (const id of [...graphState.positions.keys()]) {
     if (!state.entities.has(id)) {
       graphState.positions.delete(id);
       graphState.dimensions.delete(id);
+      dynamicGraphState.knownIds.delete(id);
+      dynamicGraphState.velocities.delete(id);
     } else if (!visibleIds.has(id)) {
       continue;
     }
+  }
+
+  if (newIds.size || force) {
+    dynamicGraphState.pendingMotion = true;
+    dynamicGraphState.movableIds = graphState.userTransformed
+      ? newIds
+      : new Set(visibleIds);
   }
 };
 
@@ -245,13 +323,254 @@ graphEndpoint = function compactGraphEndpoint(source, target) {
   };
 };
 
+function graphRectangle(entity) {
+  const position = graphState.positions.get(entity.id);
+  const dimensions = graphState.dimensions.get(entity.id);
+  return position && dimensions
+    ? {
+        id: entity.id,
+        x: position.x,
+        y: position.y,
+        width: dimensions.width,
+        height: dimensions.height,
+      }
+    : null;
+}
+
+function graphSpatialBuckets(entities, cellSize = 180) {
+  const buckets = new Map();
+  for (const entity of entities) {
+    const rectangle = graphRectangle(entity);
+    if (!rectangle) {
+      continue;
+    }
+    const centerX = rectangle.x + rectangle.width / 2;
+    const centerY = rectangle.y + rectangle.height / 2;
+    const key = `${Math.floor(centerX / cellSize)}:${Math.floor(
+      centerY / cellSize,
+    )}`;
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+    }
+    buckets.get(key).push(entity);
+  }
+  return buckets;
+}
+
+function applyCollisionForces(entities, forces) {
+  const buckets = graphSpatialBuckets(entities);
+  const processed = new Set();
+  for (const [key, bucket] of buckets.entries()) {
+    const [baseX, baseY] = key.split(":").map(Number);
+    const neighbors = [];
+    for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+      for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+        neighbors.push(
+          ...(buckets.get(`${baseX + offsetX}:${baseY + offsetY}`) || []),
+        );
+      }
+    }
+    for (const left of bucket) {
+      const leftRectangle = graphRectangle(left);
+      if (!leftRectangle) {
+        continue;
+      }
+      for (const right of neighbors) {
+        if (left.id === right.id) {
+          continue;
+        }
+        const pair = [left.id, right.id].sort().join("|");
+        if (processed.has(pair)) {
+          continue;
+        }
+        processed.add(pair);
+        const rightRectangle = graphRectangle(right);
+        if (
+          !rightRectangle ||
+          !rectanglesOverlap(
+            leftRectangle,
+            rightRectangle,
+            COMPACT_GRAPH.horizontalGap,
+            COMPACT_GRAPH.verticalGap,
+          )
+        ) {
+          continue;
+        }
+
+        const leftCenterX = leftRectangle.x + leftRectangle.width / 2;
+        const leftCenterY = leftRectangle.y + leftRectangle.height / 2;
+        const rightCenterX = rightRectangle.x + rightRectangle.width / 2;
+        const rightCenterY = rightRectangle.y + rightRectangle.height / 2;
+        let dx = rightCenterX - leftCenterX;
+        let dy = rightCenterY - leftCenterY;
+        if (Math.abs(dx) + Math.abs(dy) < 0.001) {
+          dx = Math.random() - 0.5;
+          dy = Math.random() - 0.5;
+        }
+        const distance = Math.max(1, Math.hypot(dx, dy));
+        const push = 1.9;
+        const unitX = dx / distance;
+        const unitY = dy / distance;
+        forces.get(left.id).x -= unitX * push;
+        forces.get(left.id).y -= unitY * push;
+        forces.get(right.id).x += unitX * push;
+        forces.get(right.id).y += unitY * push;
+      }
+    }
+  }
+}
+
+function applyRelationshipForces(entitiesById, forces) {
+  for (const relation of state.relationships.values()) {
+    const source = entitiesById.get(relation.source_id);
+    const target = entitiesById.get(relation.target_id);
+    if (!source || !target) {
+      continue;
+    }
+    const sourceRectangle = graphRectangle(source);
+    const targetRectangle = graphRectangle(target);
+    if (!sourceRectangle || !targetRectangle) {
+      continue;
+    }
+    const sourceX = sourceRectangle.x + sourceRectangle.width / 2;
+    const sourceY = sourceRectangle.y + sourceRectangle.height / 2;
+    const targetX = targetRectangle.x + targetRectangle.width / 2;
+    const targetY = targetRectangle.y + targetRectangle.height / 2;
+    const dx = targetX - sourceX;
+    const dy = targetY - sourceY;
+    const distance = Math.max(1, Math.hypot(dx, dy));
+    const preferred = 145;
+    const spring = (distance - preferred) * 0.0035;
+    const unitX = dx / distance;
+    const unitY = dy / distance;
+    forces.get(source.id).x += unitX * spring;
+    forces.get(source.id).y += unitY * spring;
+    forces.get(target.id).x -= unitX * spring;
+    forces.get(target.id).y -= unitY * spring;
+  }
+}
+
+function updateDynamicGraphNodes(entities) {
+  for (const entity of entities) {
+    const position = graphState.positions.get(entity.id);
+    const entry = graphState.nodeElements.get(entity.id);
+    if (!position || !entry) {
+      continue;
+    }
+    entry.group.setAttribute(
+      "transform",
+      `translate(${position.x} ${position.y})`,
+    );
+  }
+  updateGraphEdges();
+}
+
+function dynamicGraphStep(timestamp, entities) {
+  if (!dynamicGraphState.animationStartedAt) {
+    dynamicGraphState.animationStartedAt = timestamp;
+    dynamicGraphState.lastFrameAt = timestamp;
+  }
+  const elapsed = timestamp - dynamicGraphState.animationStartedAt;
+  const delta = Math.min(
+    2,
+    Math.max(
+      0.35,
+      (timestamp - dynamicGraphState.lastFrameAt) / 16.67,
+    ),
+  );
+  dynamicGraphState.lastFrameAt = timestamp;
+
+  const movable = dynamicGraphState.movableIds;
+  const forces = new Map(
+    entities.map((entity) => [entity.id, { x: 0, y: 0 }]),
+  );
+  const entitiesById = new Map(entities.map((entity) => [entity.id, entity]));
+  applyCollisionForces(entities, forces);
+  applyRelationshipForces(entitiesById, forces);
+
+  const bounds = dynamicGraphBounds(entities);
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+  let speedTotal = 0;
+
+  for (const entity of entities) {
+    if (!movable.has(entity.id)) {
+      continue;
+    }
+    const position = graphState.positions.get(entity.id);
+    const dimensions = graphState.dimensions.get(entity.id);
+    const force = forces.get(entity.id);
+    const velocity =
+      dynamicGraphState.velocities.get(entity.id) || { x: 0, y: 0 };
+    const nodeCenterX = position.x + dimensions.width / 2;
+    const nodeCenterY = position.y + dimensions.height / 2;
+    force.x += (centerX - nodeCenterX) * 0.00045;
+    force.y += (centerY - nodeCenterY) * 0.00045;
+
+    velocity.x = (velocity.x + force.x * delta) * 0.82;
+    velocity.y = (velocity.y + force.y * delta) * 0.82;
+    position.x += velocity.x * delta;
+    position.y += velocity.y * delta;
+    position.x = Math.max(
+      bounds.x,
+      Math.min(bounds.x + bounds.width - dimensions.width, position.x),
+    );
+    position.y = Math.max(
+      bounds.y,
+      Math.min(bounds.y + bounds.height - dimensions.height, position.y),
+    );
+    dynamicGraphState.velocities.set(entity.id, velocity);
+    speedTotal += Math.abs(velocity.x) + Math.abs(velocity.y);
+  }
+
+  updateDynamicGraphNodes(entities);
+  if (
+    !graphState.userTransformed &&
+    Math.floor(elapsed / 120) !== Math.floor((elapsed - 17) / 120)
+  ) {
+    fitGraph(entities);
+  }
+
+  const averageSpeed = speedTotal / Math.max(1, movable.size);
+  if (
+    elapsed < COMPACT_GRAPH.simulationMilliseconds &&
+    (elapsed < 260 || averageSpeed > 0.025)
+  ) {
+    dynamicGraphState.animationFrame = requestAnimationFrame((next) =>
+      dynamicGraphStep(next, entities),
+    );
+    return;
+  }
+
+  dynamicGraphState.animationFrame = null;
+  dynamicGraphState.animationStartedAt = 0;
+  dynamicGraphState.lastFrameAt = 0;
+  if (!graphState.userTransformed) {
+    fitGraph(entities);
+  }
+}
+
+function startDynamicGraphMotion(entities) {
+  stopDynamicGraphMotion();
+  dynamicGraphState.animationStartedAt = 0;
+  dynamicGraphState.lastFrameAt = 0;
+  dynamicGraphState.pendingMotion = false;
+  if (!entities.length || !dynamicGraphState.movableIds.size) {
+    return;
+  }
+  dynamicGraphState.animationFrame = requestAnimationFrame((timestamp) =>
+    dynamicGraphStep(timestamp, entities),
+  );
+}
+
 const baseRenderGraph = renderGraph;
-renderGraph = function renderCompactGraph() {
+renderGraph = function renderDynamicCompactGraph() {
   baseRenderGraph();
   if (state.activePane !== "graph") {
     return;
   }
 
+  const entities = visibleGraphEntities();
   for (const [id, entry] of graphState.nodeElements.entries()) {
     const dimensions = graphState.dimensions.get(id);
     if (!dimensions) {
@@ -314,10 +633,22 @@ renderGraph = function renderCompactGraph() {
   }
 
   updateGraphEdges();
+  if (dynamicGraphState.pendingMotion) {
+    startDynamicGraphMotion(entities);
+  }
+};
+
+const baseApplyActivity = applyActivity;
+applyActivity = function applyLiveActivity(type, activity) {
+  baseApplyActivity(type, activity);
+  const stored = activity?.id ? state.activities.get(activity.id) : null;
+  if (stored) {
+    stored.ui_updated_at = Date.now();
+  }
 };
 
 const baseRenderActivities = renderActivities;
-renderActivities = function renderOnlyActiveWorkers() {
+renderActivities = function renderOnlyCurrentSearches() {
   const allActivities = state.activities;
   const workerLimit = Math.max(
     1,
@@ -325,9 +656,23 @@ renderActivities = function renderOnlyActiveWorkers() {
   );
   const activeActivities = new Map(
     [...allActivities.entries()]
-      .filter(([, activity]) => activity.status === "running")
+      .filter(([, activity]) => {
+        if (activity.status !== "running") {
+          return false;
+        }
+        if (activity.active === false || activity.kind === "batch") {
+          return false;
+        }
+        return true;
+      })
+      .sort(
+        ([, left], [, right]) =>
+          Number(right.ui_updated_at || 0) - Number(left.ui_updated_at || 0) ||
+          Number(right.requests_used || 0) - Number(left.requests_used || 0),
+      )
       .slice(0, workerLimit),
   );
+
   state.activities = activeActivities;
   try {
     baseRenderActivities();
@@ -338,10 +683,28 @@ renderActivities = function renderOnlyActiveWorkers() {
   if (!activeActivities.size) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = "No active workers.";
+    empty.textContent = "No active searches.";
     $("activityView").replaceChildren(empty);
   }
 };
+
+const graphInteractionSurface = $("graph");
+if (graphInteractionSurface) {
+  graphInteractionSurface.addEventListener(
+    "pointerdown",
+    stopDynamicGraphMotion,
+    { capture: true },
+  );
+  graphInteractionSurface.addEventListener(
+    "wheel",
+    stopDynamicGraphMotion,
+    { capture: true, passive: true },
+  );
+}
+for (const controlId of ["graphZoomIn", "graphZoomOut", "graphFit"]) {
+  const control = $(controlId);
+  control?.addEventListener("click", stopDynamicGraphMotion);
+}
 
 if (state.activePane === "graph") {
   renderGraph();

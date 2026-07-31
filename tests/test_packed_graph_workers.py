@@ -10,30 +10,34 @@ JAVASCRIPT = (
 ).read_text(encoding="utf-8")
 
 
-class PackedGraphAndWorkerTests(unittest.TestCase):
-    def test_graph_uses_two_dimensional_space_aware_packing(self) -> None:
-        self.assertIn("packedLayoutGraph", JAVASCRIPT)
-        self.assertIn("packedGraphColumns", JAVASCRIPT)
-        self.assertIn("packedGraphOrder", JAVASCRIPT)
+class DynamicGraphAndWorkerTests(unittest.TestCase):
+    def test_graph_uses_random_collision_free_positions(self) -> None:
+        self.assertIn("randomAvailableLayoutGraph", JAVASCRIPT)
+        self.assertIn("randomAvailableGraphPosition", JAVASCRIPT)
+        self.assertIn("randomGraphCandidate", JAVASCRIPT)
         self.assertIn("rectanglesOverlap", JAVASCRIPT)
-        self.assertIn("graphViewportSize()", JAVASCRIPT)
-        self.assertIn("horizontalGap: 14", JAVASCRIPT)
-        self.assertIn("verticalGap: 12", JAVASCRIPT)
-        self.assertNotIn("depth * COMPACT_GRAPH.horizontalGap", JAVASCRIPT)
+        self.assertIn("dynamicGraphBounds", JAVASCRIPT)
+        self.assertIn("Math.random()", JAVASCRIPT)
+        self.assertIn("randomAttempts: 180", JAVASCRIPT)
 
-    def test_graph_keeps_automatic_fit_until_manual_interaction(self) -> None:
-        self.assertIn(
-            "const preserveManualLayout = graphState.userTransformed && !force",
-            JAVASCRIPT,
-        )
-        self.assertIn("graphState.positions.clear()", JAVASCRIPT)
+    def test_graph_animates_and_auto_fits_as_nodes_arrive(self) -> None:
+        self.assertIn("startDynamicGraphMotion", JAVASCRIPT)
+        self.assertIn("dynamicGraphStep", JAVASCRIPT)
+        self.assertIn("requestAnimationFrame", JAVASCRIPT)
+        self.assertIn("applyCollisionForces", JAVASCRIPT)
+        self.assertIn("applyRelationshipForces", JAVASCRIPT)
+        self.assertIn("fitGraph(entities)", JAVASCRIPT)
+        self.assertIn("pendingMotion", JAVASCRIPT)
+        self.assertIn("movableIds", JAVASCRIPT)
 
-    def test_activity_panel_only_renders_configured_active_workers(self) -> None:
-        self.assertIn("renderOnlyActiveWorkers", JAVASCRIPT)
-        self.assertIn('activity.status === "running"', JAVASCRIPT)
+    def test_activity_panel_only_renders_current_searches(self) -> None:
+        self.assertIn("renderOnlyCurrentSearches", JAVASCRIPT)
+        self.assertIn('activity.status !== "running"', JAVASCRIPT)
+        self.assertIn('activity.kind === "batch"', JAVASCRIPT)
+        self.assertIn("activity.active === false", JAVASCRIPT)
         self.assertIn("state.scan?.config?.workers", JAVASCRIPT)
         self.assertIn(".slice(0, workerLimit)", JAVASCRIPT)
-        self.assertIn('empty.textContent = "No active workers."', JAVASCRIPT)
+        self.assertIn('empty.textContent = "No active searches."', JAVASCRIPT)
 
 
 if __name__ == "__main__":

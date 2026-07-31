@@ -98,25 +98,35 @@ class WebUiFrontendTests(unittest.TestCase):
             re.compile(r"entity\.name\.slice\s*\("),
         )
 
-    def test_graph_uses_compact_circular_nodes(self) -> None:
+    def test_graph_uses_dynamic_random_circular_nodes(self) -> None:
         self.assertIn('createSvg("circle"', self.javascript)
         self.assertIn("compactGraphNodeDimensions", self.javascript)
         self.assertIn("compactGraphEndpoint", self.javascript)
-        self.assertIn("packedLayoutGraph", self.javascript)
-        self.assertIn("packedGraphColumns", self.javascript)
+        self.assertIn("randomAvailableLayoutGraph", self.javascript)
+        self.assertIn("randomAvailableGraphPosition", self.javascript)
+        self.assertIn("startDynamicGraphMotion", self.javascript)
+        self.assertIn("requestAnimationFrame", self.javascript)
         self.assertIn("horizontalGap: 14", self.javascript)
         self.assertIn("verticalGap: 12", self.javascript)
         self.assertIn("schema: 18", self.javascript)
         self.assertIn("cell: 12", self.javascript)
         self.assertIn("compactGraphLabel", self.javascript)
-        self.assertNotIn("width: Math.max(170", self.javascript.split(
-            "const COMPACT_GRAPH", maxsplit=1
-        )[1])
+        self.assertNotIn(
+            "width: Math.max(170",
+            self.javascript.split("const COMPACT_GRAPH", maxsplit=1)[1],
+        )
 
     def test_activity_snapshot_patch_is_integrated_in_main_javascript(self) -> None:
         self.assertIn("snapshot.activities || []", self.javascript)
         self.assertIn("started_at: startedAt", self.javascript)
         self.assertNotIn("const selectScanBase=selectScan", self.html)
+
+    def test_current_activity_uses_live_worker_events(self) -> None:
+        self.assertIn("renderOnlyCurrentSearches", self.javascript)
+        self.assertIn('activity.kind === "batch"', self.javascript)
+        self.assertIn("activity.active === false", self.javascript)
+        self.assertIn("ui_updated_at", self.javascript)
+        self.assertIn("No active searches.", self.javascript)
 
     def test_special_characters_are_documented_as_numeric_codes(self) -> None:
         self.assertIn("Percent (37) and underscore (95)", self.html)
