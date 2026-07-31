@@ -6,7 +6,7 @@ import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TextIO
+from typing import Any, TextIO
 
 _COLOR_MODES = {"auto", "always", "never"}
 _BANNER_WIDTH = 50
@@ -14,12 +14,12 @@ _ANSI_SEQUENCE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 _COMMAND_LINE = re.compile(
     r"^(?P<indent>\s{2,})(?P<command>"
     r"(?:-{1,2}[\w-]+|\{[^}]+\}|schemas|tables|columns|extract|probe|rows|map|"
-    r"graph|schema-map|web|start|stop|restart|status|users|config|update)\b)"
+    r"graph|schema-map|web|start|stop|restart|status|users|config|update))(?=\s|$)"
 )
 _LIST_ITEM = re.compile(r"^(?P<indent>\s*)(?P<index>\[\d+\])(?P<rest>.*)$")
 _LABEL_LINE = re.compile(
-    r"^(?P<label>Installed version|Available version|Repository|Source|Service|"
-    r"Service configuration|Updated service configuration|Oracle calibrated|"
+    r"^(?P<label>Installed version|Available version|Repository|Source|"
+    r"Updated service configuration|Service configuration|Service|Oracle calibrated|"
     r"Report written|Home|Python|Command|Native)(?P<separator>:\s*)(?P<value>.*)$",
     re.IGNORECASE,
 )
@@ -93,7 +93,11 @@ def extract_terminal_options(
     configured = os.environ.get("SQLIBLIND_COLOR", "auto").strip().casefold()
     if configured not in _COLOR_MODES:
         configured = "auto"
-    color = "never" if "NO_COLOR" in os.environ and configured == "auto" else configured
+    color = (
+        "never"
+        if "NO_COLOR" in os.environ and configured == "auto"
+        else configured
+    )
     show_banner = True
     cleaned: list[str] = []
     index = 0
@@ -153,10 +157,13 @@ def _enable_windows_ansi(stream: TextIO) -> bool:
 
         file_descriptor = stream.fileno()
         standard_handle = -11 if file_descriptor == 1 else -12
-        kernel32 = ctypes.windll.kernel32
+        kernel32 = getattr(ctypes, "windll").kernel32
         handle = kernel32.GetStdHandle(standard_handle)
         mode = ctypes.c_uint()
-        if handle in (0, -1) or not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        if handle in (0, -1) or not kernel32.GetConsoleMode(
+            handle,
+            ctypes.byref(mode),
+        ):
             return False
         enable_virtual_terminal_processing = 0x0004
         return bool(
@@ -174,18 +181,20 @@ def _color_enabled(mode: str, stream: TextIO) -> bool:
         return False
     if mode == "always":
         return True
-    if "NO_COLOR" in os.environ or os.environ.get("TERM", "").casefold() == "dumb":
+    if "NO_COLOR" in os.environ:
+        return False
+    if os.environ.get("TERM", "").casefold() == "dumb":
         return False
     return _isatty(stream) and _enable_windows_ansi(stream)
 
 
 def _split_control_prefix(value: str) -> tuple[str, str]:
     position = 0
-    while True:
-        match = _ANSI_SEQUENCE.match(value, position)
+    while position < len(value):
+        match = _ANSI_SEQUENCE.match(value[position:])
         if match is None:
             break
-        position = match.end()
+        position += match.end()
     return value[:position], value[position:]
 
 
@@ -234,8 +243,9 @@ def _style_visible_line(line: str) -> str:
         return paint(line, DIM, CYAN)
     if stripped == "USERNAME                      ROLE      STATE       EXPIRES":
         return paint(line, BOLD, GREEN)
+    if lowered.startswith("usage:"):
+        return paint(line, BOLD, GREEN)
     if stripped.endswith(":") and lowered in {
-        "usage:",
         "options:",
         "positional arguments:",
         "additional commands:",
@@ -264,24 +274,28 @@ def _style_visible_line(line: str) -> str:
 
     if lowered.startswith("update available:"):
         return paint(line, BOLD, YELLOW)
-    if lowered.startswith((
-        "created user ",
-        "enabled ",
-        "disabled ",
-        "deleted ",
-        "password reset ",
-        "set ",
-        "updated expiration ",
-        "updated imr-sqliblind ",
-        "imr-sqliblind ",
-        "installation completed",
-    )):
+    if lowered.startswith(
+        (
+            "created user ",
+            "enabled ",
+            "disabled ",
+            "deleted ",
+            "password reset ",
+            "set ",
+            "updated expiration ",
+            "updated imr-sqliblind ",
+            "imr-sqliblind ",
+            "installation completed",
+        )
+    ):
         return paint(line, GREEN)
-    if lowered.startswith((
-        "bootstrap login ",
-        "the service was already ",
-        "open a new ",
-    )):
+    if lowered.startswith(
+        (
+            "bootstrap login ",
+            "the service was already ",
+            "open a new ",
+        )
+    ):
         return paint(line, YELLOW)
     return line
 
@@ -294,7 +308,8 @@ class SemanticColorStream:
 
     def write(self, value: str) -> int:
         if not value:
-            return self._stream.write(value)
+            self._stream.write(value)
+            return 0
         rendered: list[str] = []
         for part in value.splitlines(keepends=True):
             if part.endswith("\r\n"):
@@ -305,7 +320,8 @@ class SemanticColorStream:
                 body, ending = part, ""
             control, visible = _split_control_prefix(body)
             rendered.append(control + _style_visible_line(visible) + ending)
-        return self._stream.write("".join(rendered))
+        self._stream.write("".join(rendered))
+        return len(value)
 
     def flush(self) -> None:
         self._stream.flush()
@@ -324,7 +340,7 @@ class SemanticColorStream:
     def errors(self) -> str | None:
         return getattr(self._stream, "errors", None)
 
-    def __getattr__(self, name: str) -> object:
+    def __getattr__(self, name: str) -> Any:
         return getattr(self._stream, name)
 
 
@@ -338,8 +354,12 @@ def terminal_session(
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
-    stdout_color = not machine_output and _color_enabled(options.color, original_stdout)
-    stderr_color = not machine_output and _color_enabled(options.color, original_stderr)
+    stdout_color = (
+        not machine_output and _color_enabled(options.color, original_stdout)
+    )
+    stderr_color = (
+        not machine_output and _color_enabled(options.color, original_stderr)
+    )
     if stdout_color:
         sys.stdout = SemanticColorStream(original_stdout)  # type: ignore[assignment]
     if stderr_color:
@@ -360,6 +380,9 @@ def terminal_session(
 
 
 __all__ = [
+    "BRIGHT_GREEN",
+    "RED",
+    "RESET",
     "SemanticColorStream",
     "TerminalOptionError",
     "TerminalOptions",
