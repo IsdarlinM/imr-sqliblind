@@ -1,20 +1,23 @@
 "use strict";
 
 scanMenuState.busy = false;
-document.body.classList.add("web-menu-ready");
-
 const scanMenu = $("appMenu");
+
 function syncScanMenuInertState() {
   if (scanMenu) {
     scanMenu.inert = !scanMenu.classList.contains("open");
   }
 }
+
 if (scanMenu) {
+  document.body.classList.add("web-menu-ready");
   syncScanMenuInertState();
-  new MutationObserver(syncScanMenuInertState).observe(scanMenu, {
-    attributes: true,
-    attributeFilter: ["class"],
-  });
+  if ("MutationObserver" in window) {
+    new MutationObserver(syncScanMenuInertState).observe(scanMenu, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+  }
 }
 
 function setScanMenuBusy(busy) {
