@@ -43,6 +43,25 @@ This bootstrap account is marked `must_change_password`. The browser redirects i
 
 The default service binds only to `127.0.0.1`. Do not expose `admin:admin` to another device. Configure the final administrator password before enabling remote access.
 
+## Browser administration
+
+After replacing the bootstrap password, administrators can open:
+
+```text
+http://127.0.0.1:43127/admin/
+```
+
+The browser page supports:
+
+- creating permanent or temporary users;
+- assigning `admin`, `operator`, or `viewer` roles;
+- enabling and disabling accounts;
+- changing or removing expiration;
+- resetting passwords and requiring another change at next login;
+- deleting users while preserving the last usable administrator.
+
+All browser actions require the authenticated administrator session and its CSRF token. The page calls the same validated user store used by the CLI and HTTP administration API.
+
 ## User commands
 
 Create permanent users:
