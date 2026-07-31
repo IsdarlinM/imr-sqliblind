@@ -64,20 +64,23 @@ jobs:
   installer-windows:
     name: Windows native installer
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-      - name: Install with custom prefix
+      - name: Install with managed Python and persistent PATH
         shell: cmd
         run: |
-          call install.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --no-path
-          call "%RUNNER_TEMP%\imr-sqliblind\bin\sqliblind.cmd" --version
-          call "%RUNNER_TEMP%\imr-sqliblind\bin\sqliblind.cmd" web --help
-      - name: Uninstall
+          call install.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --managed-python
+          where sqliblind
+          sqliblind --version
+          sqliblind web --help
+          powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$bin=(Join-Path $env:RUNNER_TEMP 'imr-sqliblind\bin').TrimEnd('\'); $current=[Environment]::GetEnvironmentVariable('Path','User'); $found=$false; if($current){ foreach($item in $current.Split(';')){ if($item -and $item.TrimEnd('\') -ieq $bin){ $found=$true; break } } }; if(-not $found){ exit 1 }"
+      - name: Uninstall and clean persistent PATH
         shell: cmd
         run: |
-          call uninstall.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind" --no-path
+          call uninstall.cmd --prefix "%RUNNER_TEMP%\imr-sqliblind"
           if exist "%RUNNER_TEMP%\imr-sqliblind" exit /b 1
+          powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$bin=(Join-Path $env:RUNNER_TEMP 'imr-sqliblind\bin').TrimEnd('\'); $current=[Environment]::GetEnvironmentVariable('Path','User'); if($current){ foreach($item in $current.Split(';')){ if($item -and $item.TrimEnd('\') -ieq $bin){ exit 1 } } }; foreach($name in @('IMR_SQLIBLIND_HOME','SQLIBLIND_PYTHON','SQLIBLIND_BIN','SQLIBLIND_COMMAND','SQLIBLIND_NATIVE_COMMAND')){ if([Environment]::GetEnvironmentVariable($name,'User')){ exit 1 } }"
