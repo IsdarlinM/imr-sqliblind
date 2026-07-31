@@ -11,12 +11,17 @@ WEBUI = ROOT / "src" / "blind_sqli" / "webui"
 TABLE_JS = WEBUI / "table-view.js"
 TABLE_RUNTIME_JS = WEBUI / "table-view-runtime.js"
 TABLE_CSS = WEBUI / "table-view.css"
+HARNESS = ROOT / "tests" / "table_view_harness.js"
 
 
 class WebTableViewTests(unittest.TestCase):
-    def test_table_view_javascript_is_valid(self) -> None:
+    def test_table_view_javascript_is_valid_and_harness_passes(self) -> None:
         subprocess.run(["node", "--check", str(TABLE_JS)], check=True)
         subprocess.run(["node", "--check", str(TABLE_RUNTIME_JS)], check=True)
+        subprocess.run(
+            ["node", str(HARNESS), str(TABLE_JS), str(TABLE_RUNTIME_JS)],
+            check=True,
+        )
 
     def test_table_view_uses_native_tables_and_safe_text_nodes(self) -> None:
         javascript = TABLE_JS.read_text(encoding="utf-8")
