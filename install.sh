@@ -146,6 +146,7 @@ log "Installing project dependencies and web console"
 [[ -x "$VENV_COMMAND" ]] || die "Installation completed without creating $VENV_COMMAND"
 
 mkdir -p "$BIN_DIR"
+BIN_DIR="$(cd "$BIN_DIR" && pwd -P)"
 cat > "$BIN_DIR/$COMMAND_NAME" <<EOF_WRAPPER
 #!/usr/bin/env sh
 exec "$VENV_COMMAND" "\$@"
@@ -171,12 +172,27 @@ remove_profile_block() {
   mv "$temporary" "$profile"
 }
 
+should_manage_profile() {
+  local profile="$1" shell_name="${SHELL##*/}"
+  [[ "$profile" == "$HOME/.profile" ]] && return 0
+  [[ -e "$profile" ]] && return 0
+  case "$shell_name:$profile" in
+    bash:"$HOME/.bash_profile"|bash:"$HOME/.bashrc"|zsh:"$HOME/.zprofile"|zsh:"$HOME/.zshrc")
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 persist_environment() {
   local profile
-  for profile in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
-    if [[ "$profile" != "$HOME/.profile" && ! -e "$profile" ]]; then
-      continue
-    fi
+  for profile in \
+    "$HOME/.profile" \
+    "$HOME/.bash_profile" \
+    "$HOME/.bashrc" \
+    "$HOME/.zprofile" \
+    "$HOME/.zshrc"; do
+    should_manage_profile "$profile" || continue
     touch "$profile"
     remove_profile_block "$profile"
     cat >> "$profile" <<EOF_PROFILE
@@ -194,6 +210,25 @@ EOF_PROFILE
   done
 }
 
+path_contains_bin() {
+  case ":$1:" in
+    *":$BIN_DIR:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+activate_and_verify_command() {
+  local resolved
+  if ! path_contains_bin "$PATH"; then
+    export PATH="$BIN_DIR:$PATH"
+  fi
+  hash -r 2>/dev/null || true
+  resolved="$(command -v "$COMMAND_NAME" 2>/dev/null || true)"
+  [[ -n "$resolved" ]] || die "$COMMAND_NAME is still unavailable after updating PATH"
+  [[ "$(cd -- "$(dirname -- "$resolved")" && pwd -P)/$(basename -- "$resolved")" == "$BIN_DIR/$COMMAND_NAME" ]] ||
+    die "$COMMAND_NAME resolves to an unexpected command: $resolved"
+}
+
 if ((NO_PATH == 0)); then
   persist_environment
 fi
@@ -201,16 +236,17 @@ fi
 export IMR_SQLIBLIND_HOME="$PREFIX"
 export SQLIBLIND_PYTHON="$VENV_PYTHON"
 export SQLIBLIND_BIN="$BIN_DIR"
-export PATH="$BIN_DIR:$PATH"
+activate_and_verify_command
 
 log "Verifying CLI, service config, and web console"
-"$BIN_DIR/$COMMAND_NAME" --version
-"$BIN_DIR/$COMMAND_NAME" config init >/dev/null
-"$BIN_DIR/$COMMAND_NAME" web --help >/dev/null
+"$COMMAND_NAME" --version
+"$COMMAND_NAME" config init >/dev/null
+"$COMMAND_NAME" web --help >/dev/null
 printf '\nInstallation completed.\n'
 printf '  Home:    %s\n' "$PREFIX"
 printf '  Python:  %s\n' "$VENV_PYTHON"
 printf '  Command: %s\n' "$BIN_DIR/$COMMAND_NAME"
 if ((NO_PATH == 0)); then
-  printf '\nOpen a new shell or run: source ~/.profile\n'
+  printf '\nPATH and user environment variables were configured automatically.\n'
+  printf 'Open a new shell, or load the active profile with: source ~/.profile\n'
 fi
