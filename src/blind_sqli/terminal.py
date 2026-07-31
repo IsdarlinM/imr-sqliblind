@@ -30,11 +30,8 @@ DIM = "\x1b[2m"
 GREEN = "\x1b[38;5;114m"
 BRIGHT_GREEN = "\x1b[38;5;120m"
 CYAN = "\x1b[38;5;80m"
-BLUE = "\x1b[38;5;75m"
-VIOLET = "\x1b[38;5;141m"
 YELLOW = "\x1b[38;5;186m"
 RED = "\x1b[38;5;174m"
-GRAY = "\x1b[38;5;245m"
 
 
 class TerminalOptionError(ValueError):
@@ -57,9 +54,7 @@ class TerminalSession:
     stderr_color: bool
 
     def print_banner(self, version: str) -> None:
-        if self.machine_output or not self.options.show_banner:
-            return
-        if not _isatty(self.stdout):
+        if self.machine_output or not self.options.show_banner or not _isatty(self.stdout):
             return
         banner = build_banner(version)
         if self.stdout_color:
@@ -69,7 +64,7 @@ class TerminalSession:
 
 
 def build_banner(version: str) -> str:
-    """Return the compact, fixed-width imr-sqliblind banner."""
+    """Return the compact fixed-width imr-sqliblind banner."""
 
     lines = [
         "+" + ("-" * _BANNER_WIDTH) + "+",
@@ -88,7 +83,7 @@ def paint(text: str, *codes: str) -> str:
 def extract_terminal_options(
     argv: Sequence[str],
 ) -> tuple[list[str], TerminalOptions]:
-    """Remove global terminal options while preserving all command arguments."""
+    """Remove global presentation options before command-specific parsing."""
 
     configured = os.environ.get("SQLIBLIND_COLOR", "auto").strip().casefold()
     if configured not in _COLOR_MODES:
@@ -100,8 +95,8 @@ def extract_terminal_options(
     )
     show_banner = True
     cleaned: list[str] = []
-    index = 0
     values = list(argv)
+    index = 0
     while index < len(values):
         value = values[index]
         if value == "--no-color":
@@ -126,7 +121,7 @@ def extract_terminal_options(
 
 
 def is_machine_output(argv: Sequence[str]) -> bool:
-    """Detect command modes whose stdout must remain byte-clean."""
+    """Return whether stdout must remain free of presentation bytes."""
 
     values = list(argv)
     if "--json" in values or "_service-run" in values or "--version" in values:
@@ -155,23 +150,15 @@ def _enable_windows_ansi(stream: TextIO) -> bool:
     try:
         import ctypes
 
-        file_descriptor = stream.fileno()
-        standard_handle = -11 if file_descriptor == 1 else -12
-        kernel32 = getattr(ctypes, "windll").kernel32
+        standard_handle = -11 if stream.fileno() == 1 else -12
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         handle = kernel32.GetStdHandle(standard_handle)
         mode = ctypes.c_uint()
-        if handle in (0, -1) or not kernel32.GetConsoleMode(
-            handle,
-            ctypes.byref(mode),
-        ):
+        if handle in (0, -1):
             return False
-        enable_virtual_terminal_processing = 0x0004
-        return bool(
-            kernel32.SetConsoleMode(
-                handle,
-                mode.value | enable_virtual_terminal_processing,
-            )
-        )
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
     except (AttributeError, OSError, ValueError):
         return False
 
@@ -180,6 +167,8 @@ def _color_enabled(mode: str, stream: TextIO) -> bool:
     if mode == "never":
         return False
     if mode == "always":
+        if os.name == "nt" and _isatty(stream):
+            return _enable_windows_ansi(stream)
         return True
     if "NO_COLOR" in os.environ:
         return False
@@ -205,10 +194,10 @@ def _paint_label(line: str) -> str | None:
     label = paint(match.group("label"), BOLD, CYAN)
     value = match.group("value")
     if match.group("label").casefold() == "service":
-        normalized = value.casefold()
-        if normalized == "running":
+        status = value.casefold()
+        if status == "running":
             value = paint(value, BOLD, GREEN)
-        elif normalized in {"stopped", "unknown"}:
+        elif status in {"stopped", "unknown"}:
             value = paint(value, BOLD, YELLOW)
         else:
             value = paint(value, BOLD, RED)
@@ -221,8 +210,8 @@ def _style_visible_line(line: str) -> str:
     stripped = line.lstrip()
     if not stripped:
         return line
-
     lowered = stripped.casefold()
+
     if lowered.startswith(("error:", "update error:", "[x]", "fatal:")):
         return paint(line, BOLD, RED)
     if lowered.startswith(("interrupted by user", "warning:", "[!]")):
@@ -231,9 +220,7 @@ def _style_visible_line(line: str) -> str:
         return paint(line, BOLD, GREEN)
     if stripped.startswith("Findings:"):
         return paint(line, YELLOW)
-    if stripped[0] in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏":
-        return paint(line, GREEN)
-    if stripped.startswith("✓"):
+    if stripped[0] in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" or stripped.startswith("✓"):
         return paint(line, GREEN)
     if stripped.startswith("×"):
         return paint(line, RED)
@@ -290,18 +277,14 @@ def _style_visible_line(line: str) -> str:
     ):
         return paint(line, GREEN)
     if lowered.startswith(
-        (
-            "bootstrap login ",
-            "the service was already ",
-            "open a new ",
-        )
+        ("bootstrap login ", "the service was already ", "open a new ")
     ):
         return paint(line, YELLOW)
     return line
 
 
 class SemanticColorStream:
-    """Color semantic terminal lines while preserving the original text content."""
+    """Color semantic terminal lines without changing their plain text."""
 
     def __init__(self, stream: TextIO) -> None:
         self._stream = stream
@@ -350,7 +333,7 @@ def terminal_session(
     *,
     machine_output: bool = False,
 ) -> Iterator[TerminalSession]:
-    """Temporarily install semantic stdout/stderr coloring for one CLI invocation."""
+    """Install semantic coloring only for the current CLI invocation."""
 
     original_stdout = sys.stdout
     original_stderr = sys.stderr
