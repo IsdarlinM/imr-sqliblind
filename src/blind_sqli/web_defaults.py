@@ -50,6 +50,14 @@ BUILTIN_SCAN_DEFAULTS: dict[str, Any] = {
     "request_event_sample": 20,
 }
 
+_ADDITIONAL_SENSITIVE_HEADER_PARTS = {
+    "auth",
+    "credential",
+    "secret",
+    "session",
+    "token",
+}
+
 
 def merged_scan_defaults(stored: dict[str, Any] | None) -> dict[str, Any]:
     result = deepcopy(BUILTIN_SCAN_DEFAULTS)
@@ -65,6 +73,15 @@ def _settings_mapping(settings: ScanSettings) -> dict[str, Any]:
     result["true_statuses"] = sorted(settings.true_statuses)
     result["data_tables"] = sorted(settings.data_tables)
     return result
+
+
+def _header_is_sensitive(name: str) -> bool:
+    normalized = name.casefold().replace("_", "-")
+    if normalized in SENSITIVE_HEADERS:
+        return True
+    if "api-key" in normalized or normalized.endswith("-key"):
+        return True
+    return any(part in normalized for part in _ADDITIONAL_SENSITIVE_HEADER_PARTS)
 
 
 def normalize_saved_scan_defaults(raw: dict[str, Any]) -> dict[str, Any]:
@@ -89,7 +106,7 @@ def normalize_saved_scan_defaults(raw: dict[str, Any]) -> dict[str, Any]:
     normalized["headers"] = {
         str(key): str(value)
         for key, value in headers.items()
-        if str(key).casefold() not in SENSITIVE_HEADERS
+        if not _header_is_sensitive(str(key))
     }
     normalized["cookies"] = {}
     normalized["proxy"] = None
@@ -105,27 +122,28 @@ class DefaultScanProfileStore:
         self.path = database.with_name("web-default-scan.json")
         self._lock = threading.RLock()
 
+    @staticmethod
+    def _empty() -> dict[str, Any]:
+        return {
+            "config": merged_scan_defaults(None),
+            "saved": False,
+            "updated_at": None,
+        }
+
     def load(self) -> dict[str, Any]:
         with self._lock:
             if not self.path.exists():
-                return {
-                    "config": merged_scan_defaults(None),
-                    "saved": False,
-                    "updated_at": None,
-                }
+                return self._empty()
             try:
                 payload = json.loads(self.path.read_text(encoding="utf-8"))
+                config = payload.get("config")
+                if not isinstance(config, dict):
+                    raise ValueError("saved profile config must be an object")
+                normalized = normalize_saved_scan_defaults(config)
             except (OSError, json.JSONDecodeError, TypeError, ValueError):
-                return {
-                    "config": merged_scan_defaults(None),
-                    "saved": False,
-                    "updated_at": None,
-                }
-            config = payload.get("config")
-            if not isinstance(config, dict):
-                config = {}
+                return self._empty()
             return {
-                "config": merged_scan_defaults(config),
+                "config": normalized,
                 "saved": True,
                 "updated_at": payload.get("updated_at"),
             }
