@@ -4,6 +4,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from blind_sqli.web_support import load_asset
+
 ROOT = Path(__file__).resolve().parents[1]
 WEBUI = ROOT / "src" / "blind_sqli" / "webui"
 JAVASCRIPT = WEBUI / "graph-interactions.js"
@@ -39,6 +41,13 @@ class GraphRelationshipHighlightTests(unittest.TestCase):
             ".graph-node-tooltip",
         ):
             self.assertIn(selector, stylesheet)
+
+    def test_public_assets_include_graph_interaction_companions(self) -> None:
+        self.assertIn(
+            "renderGraphWithDirectRelations",
+            load_asset("inference-options.js"),
+        )
+        self.assertIn(".graph-node-tooltip", load_asset("app.css"))
 
 
 if __name__ == "__main__":
