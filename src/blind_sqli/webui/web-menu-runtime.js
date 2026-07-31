@@ -1,18 +1,51 @@
 "use strict";
 
+scanMenuState.busy = false;
+document.body.classList.add("web-menu-ready");
+
+function setScanMenuBusy(busy) {
+  scanMenuState.busy = busy;
+  for (const id of [
+    "saveDefaultScan",
+    "runCustomScan",
+    "restoreScanProfile",
+  ]) {
+    const button = $(id);
+    if (button) {
+      button.disabled = busy;
+    }
+  }
+}
+
 const saveDefaultScanProfileBeforeReset = saveDefaultScanProfile;
 saveDefaultScanProfile = async function saveDefaultScanProfileAndReset() {
-  await saveDefaultScanProfileBeforeReset();
-  if (scanMenuState.savedProfile) {
-    fillScanForm(scanMenuState.savedProfile);
+  if (scanMenuState.busy) {
+    return;
+  }
+  setScanMenuBusy(true);
+  try {
+    await saveDefaultScanProfileBeforeReset();
+    if (scanMenuState.savedProfile) {
+      fillScanForm(scanMenuState.savedProfile);
+    }
+  } finally {
+    setScanMenuBusy(false);
   }
 };
 
 const runTemporaryCustomScanBeforeReset = runTemporaryCustomScan;
 runTemporaryCustomScan = async function runTemporaryCustomScanAndReset() {
-  await runTemporaryCustomScanBeforeReset();
-  if (scanMenuState.savedProfile) {
-    scanMenuState.customDraft = cloneScanProfile(scanMenuState.savedProfile);
-    fillScanForm(scanMenuState.savedProfile);
+  if (scanMenuState.busy) {
+    return;
+  }
+  setScanMenuBusy(true);
+  try {
+    await runTemporaryCustomScanBeforeReset();
+    if (scanMenuState.savedProfile) {
+      scanMenuState.customDraft = cloneScanProfile(scanMenuState.savedProfile);
+      fillScanForm(scanMenuState.savedProfile);
+    }
+  } finally {
+    setScanMenuBusy(false);
   }
 };
