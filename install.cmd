@@ -172,8 +172,9 @@ set "SQLIBLIND_PYTHON=%VENV_PYTHON%"
 set "SQLIBLIND_BIN=%BIN_DIR%"
 set "PATH=%BIN_DIR%;%PATH%"
 
-echo [+] Verifying CLI and web console
+echo [+] Verifying CLI, service config, and web console
 call "%BIN_DIR%\sqliblind.cmd" --version || exit /b 1
+call "%BIN_DIR%\sqliblind.cmd" config init >nul || exit /b 1
 call "%BIN_DIR%\sqliblind.cmd" web --help >nul || exit /b 1
 echo.
 echo Installation completed.

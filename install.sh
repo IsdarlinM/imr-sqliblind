@@ -203,8 +203,9 @@ export SQLIBLIND_PYTHON="$VENV_PYTHON"
 export SQLIBLIND_BIN="$BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
 
-log "Verifying CLI and web console"
+log "Verifying CLI, service config, and web console"
 "$BIN_DIR/$COMMAND_NAME" --version
+"$BIN_DIR/$COMMAND_NAME" config init >/dev/null
 "$BIN_DIR/$COMMAND_NAME" web --help >/dev/null
 printf '\nInstallation completed.\n'
 printf '  Home:    %s\n' "$PREFIX"
