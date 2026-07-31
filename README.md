@@ -2,12 +2,12 @@
 
 ```text
 imr-sqliblind
-imr :: v0.7.0
+imr :: v0.8.0
 ```
 
 `imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
 
-The installed command is `sqliblind`. It provides a CLI, a realtime web console, persistent sessions, bounded concurrency, structured exports, and a secure self-update command.
+The installed command is `sqliblind`. It provides a CLI, a realtime web console, an authenticated background service, persistent scan sessions, managed users, bounded concurrency, structured exports, and a secure self-update command.
 
 ## Requirements
 
@@ -31,6 +31,10 @@ The installed command is `sqliblind`. It provides a CLI, a realtime web console,
 - Schemas, tables, columns, bounded rows, and cells.
 - CLI activity monitor without misleading percentages.
 - Realtime FastAPI/Uvicorn web console using SSE.
+- Detached user-level service controlled with `start`, `stop`, `restart`, and `status`.
+- Persistent JSON service configuration with an unusual loopback default port (`43127`).
+- SQLite-backed users, roles, temporary-account expiration, session revocation, and audit events.
+- Mandatory replacement of the bootstrap `admin:admin` password.
 - Responsive web layout for desktop, tablets, and narrow mobile screens.
 - Interactive graph with draggable nodes, canvas panning, wheel zoom, fit, and reset.
 - Graph positions preserved while realtime entities and relationships arrive.
@@ -91,6 +95,186 @@ Application: %LOCALAPPDATA%\Programs\imr-sqliblind
 Command:     %LOCALAPPDATA%\Programs\imr-sqliblind\bin\sqliblind.cmd
 ```
 
+## Authenticated background service
+
+Start the realtime console as a detached user-level service:
+
+```bash
+sqliblind start
+sqliblind status
+```
+
+Default endpoint:
+
+```text
+http://127.0.0.1:43127/
+```
+
+The deliberately unusual default port is `43127`. Override the saved host or port for one launch without modifying the configuration:
+
+```bash
+sqliblind start --port 43128
+sqliblind restart --host 127.0.0.1 --port 43129
+```
+
+Control the service:
+
+```bash
+sqliblind stop
+sqliblind restart
+sqliblind status
+```
+
+Use foreground mode for diagnostics:
+
+```bash
+sqliblind start --foreground
+```
+
+The service runs without root or Administrator privileges. Its state file contains the PID, effective URL, paths, and a random control token. `status` verifies an authenticated control endpoint, and `stop` requests graceful Uvicorn shutdown instead of killing an unverified PID.
+
+### Bootstrap administrator
+
+When the authentication database is empty, the first service start creates:
+
+```text
+Username: admin
+Password: admin
+```
+
+The bootstrap account is marked for mandatory password replacement. The browser redirects it to the password-change screen and denies console/API access until the password has been changed. The default service binds only to loopback; change the password before enabling remote access.
+
+### Users, roles, credentials, and expiration
+
+Create permanent users:
+
+```bash
+sqliblind users create analyst --role operator
+sqliblind users create auditor --role viewer
+sqliblind users create backup-admin --role admin
+```
+
+Create temporary users:
+
+```bash
+sqliblind users create contractor --role operator --expires-in 12h
+sqliblind users create reviewer --role viewer --expires-in 7d
+```
+
+Supported relative durations use minutes, hours, days, or weeks: `30m`, `12h`, `7d`, and `2w`.
+
+Manage existing users:
+
+```bash
+sqliblind users list
+sqliblind users passwd analyst
+sqliblind users role analyst viewer
+sqliblind users disable analyst
+sqliblind users enable analyst
+sqliblind users expire analyst --in 24h
+sqliblind users expire analyst --never
+sqliblind users delete analyst
+sqliblind users audit --limit 100
+```
+
+Roles:
+
+- `admin`: manage users, inspect audit events, change defaults, and operate scans.
+- `operator`: create, pause, resume, and stop scans; read sessions and exports.
+- `viewer`: read the console, sessions, events, graph, tables, and exports.
+
+Administrators can also use the responsive browser administration page at:
+
+```text
+/admin/
+```
+
+It supports account creation, permanent or temporary expiration, role changes, enable/disable, credential resets with optional mandatory replacement, deletion, and audit inspection.
+
+Passwords are prompted without echo. There is intentionally no `--password` argument because command-line secrets can leak through shell history and process listings. For controlled automation, provide one password line through standard input:
+
+```bash
+printf '%s\n' 'Strong-Temporary-Password9' | \
+  sqliblind users create ci-operator \
+  --role operator \
+  --expires-in 2h \
+  --password-stdin
+```
+
+Password, role, activation, and expiration changes revoke existing sessions. Expired users stop resolving immediately. The store prevents deleting, disabling, demoting, or making temporary the last usable administrator.
+
+### Service configuration
+
+Create or locate the persistent configuration:
+
+```bash
+sqliblind config init
+sqliblind config show
+```
+
+Default paths:
+
+```text
+Windows:
+  %LOCALAPPDATA%\Programs\imr-sqliblind\config\service.json
+
+POSIX:
+  ~/.local/share/imr-sqliblind/config/service.json
+```
+
+Update persistent defaults:
+
+```bash
+sqliblind config set --port 43128
+sqliblind config set --session-hours 8
+sqliblind config set --workspace /srv/sqliblind/workspaces
+sqliblind config set --log-file /var/log/sqliblind/service.log
+```
+
+Use another configuration file:
+
+```bash
+sqliblind start --config ./service.json
+sqliblind users --config ./service.json list
+sqliblind config --config ./service.json show
+```
+
+The JSON file controls the host, port, remote opt-in, TLS files, session lifetime, workspace, authentication database, log file, and state file. Writes use atomic replacement. On POSIX systems, configuration, service state, and the authentication database use user-only permissions where the filesystem supports them.
+
+### Remote service access
+
+Remote binding requires an explicit opt-in:
+
+```bash
+sqliblind config set --host 0.0.0.0 --allow-remote
+```
+
+Remote HTTP sends credentials, cookies, scan metadata, and results without transport encryption. Prefer TLS:
+
+```bash
+sqliblind config set \
+  --host 0.0.0.0 \
+  --allow-remote \
+  --ssl-certfile /path/server.crt \
+  --ssl-keyfile /path/server.key
+sqliblind restart
+```
+
+Certificate and key must both exist. Authentication cookies are marked `Secure` when TLS is enabled.
+
+### Service authentication security
+
+- Passwords use PBKDF2-HMAC-SHA-256 with unique random 128-bit salts and 310,000 iterations.
+- Password digest comparison is constant-time, including a same-cost fake hash for unknown users.
+- Browser sessions use random 256-bit tokens; only SHA-256 token hashes are stored.
+- Account activation, account expiration, session expiration, and authentication version are checked on every request.
+- Browser mutations require CSRF tokens.
+- Login errors do not reveal whether a username exists and repeated failures are rate-limited.
+- The legacy web token remains random and internal to the authenticated gateway; client-supplied internal-token headers are stripped.
+- Account-management and authentication events are audited without storing passwords or session tokens.
+
+Complete reference: [docs/service-and-users.md](docs/service-and-users.md).
+
 ## Updating
 
 Check versions without changing files:
@@ -132,6 +316,8 @@ git -c safe.directory="$(pwd -P)" checkout main
 git -c safe.directory="$(pwd -P)" pull --ff-only origin main
 ./install.sh
 ```
+
+Service configuration, users, audit events, workspaces, and logs live in the application data root and are preserved across updates and reinstalls.
 
 ## CLI usage
 
@@ -227,6 +413,8 @@ For `User_Profile_50%_2026` with a simulated 3 ms oracle, the development benchm
 These are deterministic laboratory measurements from the included simulator, not a promise for remote targets. Real performance depends on target latency, configured delay, rate limits, oracle noise, and server capacity.
 
 ## Realtime web console
+
+The original foreground token-authenticated command remains available independently of service mode.
 
 Start locally:
 
@@ -363,7 +551,7 @@ sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.7.0" \
+  --header "User-Agent:imr-sqliblind/0.8.0" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
@@ -401,5 +589,7 @@ bandit -q -r src
 ```
 
 Frontend regression checks cover required graph controls, overflow-safe CSS, mobile breakpoints, pointer interactions, persistent graph positions, full graph rendering, non-truncated labels, and valid JavaScript syntax.
+
+Service regression coverage includes bootstrap users, password hashing and changes, roles, account expiration, last-admin protection, persistent configuration, login, CSRF, browser administration, user APIs, authenticated service control, and detached `start` → `status` → `stop` behavior.
 
 All testing must remain minimal and within an explicitly authorized scope. Automated unlimited database dumping is intentionally excluded.
