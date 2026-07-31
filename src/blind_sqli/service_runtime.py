@@ -284,6 +284,7 @@ def run_service(
         ) from exc
 
     from .manager import ScanManager
+    from .service_admin_ui import create_admin_ui
     from .service_gateway import create_service_gateway
     from .store import SessionStore
     from .web_app import create_app
@@ -306,6 +307,7 @@ def run_service(
         csrf_token=internal_csrf_token,
         secure_cookies=tls_enabled,
     )
+    inner.mount("/admin", create_admin_ui(users))
     add_inner_csrf_cookie_middleware(
         inner,
         csrf_token=internal_csrf_token,
