@@ -78,6 +78,7 @@ set "COMMAND_PATH=%BIN_DIR%\sqliblind.cmd"
 set "PYTHON_EXE="
 set "PYTHON_ARGS="
 set "USE_MANAGED_PYTHON=0"
+set "PYTHON_VERSION_CHECK=import sys; raise SystemExit(0 if sys.version_info.major in range(4,100) or (sys.version_info.major == 3 and sys.version_info.minor in range(10,100)) else 1)"
 
 if not exist "%PREFIX%" mkdir "%PREFIX%" || goto mkdir_failed
 
@@ -92,7 +93,7 @@ if defined PYTHON_OVERRIDE (
     echo [x] Python executable not found: %PYTHON_OVERRIDE% 1>&2
     exit /b 1
   )
-  "%PYTHON_OVERRIDE%" -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
+  "%PYTHON_OVERRIDE%" -c "%PYTHON_VERSION_CHECK%" >nul 2>&1
   if errorlevel 1 (
     echo [x] --python must point to Python 3.10 or newer 1>&2
     exit /b 1
@@ -103,7 +104,7 @@ if defined PYTHON_OVERRIDE (
 
 where py.exe >nul 2>&1
 if not errorlevel 1 (
-  py -3 -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
+  py -3 -c "%PYTHON_VERSION_CHECK%" >nul 2>&1
   if not errorlevel 1 (
     set "PYTHON_EXE=py.exe"
     set "PYTHON_ARGS=-3"
@@ -113,7 +114,7 @@ if not errorlevel 1 (
 
 where python.exe >nul 2>&1
 if not errorlevel 1 (
-  python.exe -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
+  python.exe -c "%PYTHON_VERSION_CHECK%" >nul 2>&1
   if not errorlevel 1 (
     for /f "delims=" %%I in ('where python.exe') do if not defined PYTHON_EXE set "PYTHON_EXE=%%I"
     goto python_ready
@@ -122,7 +123,7 @@ if not errorlevel 1 (
 
 where python3.exe >nul 2>&1
 if not errorlevel 1 (
-  python3.exe -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
+  python3.exe -c "%PYTHON_VERSION_CHECK%" >nul 2>&1
   if not errorlevel 1 (
     for /f "delims=" %%I in ('where python3.exe') do if not defined PYTHON_EXE set "PYTHON_EXE=%%I"
     goto python_ready
@@ -134,7 +135,7 @@ echo [+] No compatible system Python found; using managed Python %MANAGED_PYTHON
 
 :python_ready
 if "%USE_MANAGED_PYTHON%"=="0" (
-  "%PYTHON_EXE%" %PYTHON_ARGS% -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
+  "%PYTHON_EXE%" %PYTHON_ARGS% -c "%PYTHON_VERSION_CHECK%" >nul 2>&1
   if errorlevel 1 (
     echo [x] Unable to locate Python 3.10 or newer 1>&2
     exit /b 1
@@ -142,7 +143,7 @@ if "%USE_MANAGED_PYTHON%"=="0" (
 )
 
 if exist "%VENV_PYTHON%" (
-  "%VENV_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
+  "%VENV_PYTHON%" -c "%PYTHON_VERSION_CHECK%" >nul 2>&1
   if errorlevel 1 rmdir /s /q "%VENV_DIR%"
 )
 
@@ -163,7 +164,7 @@ if not exist "%VENV_PYTHON%" (
   echo [x] Failed to create the Python environment 1>&2
   exit /b 1
 )
-"%VENV_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
+"%VENV_PYTHON%" -c "%PYTHON_VERSION_CHECK%" >nul 2>&1
 if errorlevel 1 (
   echo [x] The created Python environment is not Python 3.10 or newer 1>&2
   exit /b 1
