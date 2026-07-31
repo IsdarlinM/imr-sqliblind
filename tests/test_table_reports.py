@@ -48,6 +48,13 @@ class TableReportTests(unittest.TestCase):
             if line.startswith(("+", "|")):
                 self.assertTrue(set(line) <= allowed)
 
+    def test_ascii_width_remains_bounded_with_twenty_long_columns(self) -> None:
+        headers = tuple(f"very_long_column_name_{index:02d}" for index in range(20))
+        row = tuple("x" * 80 for _ in headers)
+        output = ascii_table(headers, [row], max_table_width=180)
+        self.assertTrue(output)
+        self.assertTrue(all(len(line) <= 180 for line in output.splitlines()))
+
     def test_html_table_renderer_escapes_values_and_is_self_contained(
         self,
     ) -> None:
