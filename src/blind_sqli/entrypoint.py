@@ -51,6 +51,13 @@ def _banner_allowed(arguments: Sequence[str]) -> bool:
     return "--version" not in arguments and "_service-run" not in arguments
 
 
+def _machine_output_requested(arguments: Sequence[str]) -> bool:
+    if is_machine_output(arguments):
+        return True
+    values = list(arguments)
+    return bool(values and values[0] == "config" and "show" in values[1:])
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -59,7 +66,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"sqliblind: error: {exc}", file=sys.stderr)
         return 2
 
-    machine_output = is_machine_output(arguments)
+    machine_output = _machine_output_requested(arguments)
     with terminal_session(terminal_options, machine_output=machine_output) as terminal:
         if _banner_allowed(arguments):
             terminal.print_banner(__version__)
