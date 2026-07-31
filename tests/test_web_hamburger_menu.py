@@ -11,6 +11,7 @@ WEBUI = ROOT / "src" / "blind_sqli" / "webui"
 MENU_JS = WEBUI / "web-menu.js"
 MENU_RUNTIME_JS = WEBUI / "web-menu-runtime.js"
 MENU_CSS = WEBUI / "web-menu.css"
+MENU_COMPAT_CSS = WEBUI / "web-menu-compat.css"
 
 
 class WebHamburgerMenuTests(unittest.TestCase):
@@ -20,6 +21,7 @@ class WebHamburgerMenuTests(unittest.TestCase):
 
     def test_menu_has_sessions_defaults_and_temporary_custom_scan(self) -> None:
         javascript = MENU_JS.read_text(encoding="utf-8")
+        runtime = MENU_RUNTIME_JS.read_text(encoding="utf-8")
         for text in (
             '"sessions", "Sessions"',
             '"defaults", "Default configuration"',
@@ -33,10 +35,14 @@ class WebHamburgerMenuTests(unittest.TestCase):
             self.assertIn(text, javascript)
         self.assertIn("scanMenuState.customDraft", javascript)
         self.assertIn("scanMenuState.defaultDraft", javascript)
+        self.assertIn("scanMenuState.busy", runtime)
+        self.assertIn("setScanMenuBusy(true)", runtime)
+        self.assertIn("fillScanForm(scanMenuState.savedProfile)", runtime)
         self.assertNotIn("localStorage", javascript)
 
     def test_menu_styles_convert_sidebar_to_accessible_overlay(self) -> None:
         stylesheet = MENU_CSS.read_text(encoding="utf-8")
+        fallback = MENU_COMPAT_CSS.read_text(encoding="utf-8")
         for selector in (
             ".app-menu-toggle",
             ".app-menu.open",
@@ -48,6 +54,7 @@ class WebHamburgerMenuTests(unittest.TestCase):
             self.assertIn(selector, stylesheet)
         self.assertIn("transform: translateX(-104%)", stylesheet)
         self.assertIn("position: fixed", stylesheet)
+        self.assertIn("body:not(.web-menu-ready) .layout", fallback)
 
     def test_existing_authenticated_assets_bundle_menu_companions(self) -> None:
         javascript = load_asset("inference-options.js")
@@ -55,6 +62,7 @@ class WebHamburgerMenuTests(unittest.TestCase):
         self.assertIn("buildScanMenu();", javascript)
         self.assertIn("runTemporaryCustomScanAndReset", javascript)
         self.assertIn(".app-menu-toggle", stylesheet)
+        self.assertIn("body:not(.web-menu-ready) .layout", stylesheet)
         self.assertIn(".graph-node-tooltip", stylesheet)
 
 
