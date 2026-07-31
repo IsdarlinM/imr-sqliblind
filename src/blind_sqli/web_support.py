@@ -57,7 +57,11 @@ def load_asset(name: str) -> str:
         raise ValueError("unsupported web asset")
     content = _read_webui_file(name)
     companions = {
-        "app.css": ["graph-interactions.css", "web-menu.css"],
+        "app.css": [
+            "graph-interactions.css",
+            "web-menu.css",
+            "web-menu-compat.css",
+        ],
         "inference-options.js": [
             "graph-interactions.js",
             "web-menu.js",
