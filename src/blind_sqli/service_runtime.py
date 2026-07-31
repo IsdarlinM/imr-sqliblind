@@ -17,6 +17,30 @@ from .auth import UserStore
 from .service_config import atomic_write_json, load_config
 
 
+def add_inner_csrf_cookie_middleware(
+    app: Any,
+    *,
+    csrf_token: str,
+    secure: bool,
+    session_hours: int,
+) -> Any:
+    @app.middleware("http")
+    async def service_inner_csrf_cookie(request: Any, call_next: Any):
+        response = await call_next(request)
+        response.set_cookie(
+            "sqliblind_csrf",
+            csrf_token,
+            httponly=False,
+            secure=secure,
+            samesite="strict",
+            path="/",
+            max_age=session_hours * 3600,
+        )
+        return response
+
+    return app
+
+
 def _pid_running(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -273,12 +297,20 @@ def run_service(
     users.cleanup_sessions()
 
     internal_token = secrets.token_urlsafe(32)
+    internal_csrf_token = secrets.token_urlsafe(32)
     control_token = secrets.token_urlsafe(32)
     tls_enabled = bool(config.ssl_certfile and config.ssl_keyfile)
     inner = create_app(
         manager,
         auth_token=internal_token,
+        csrf_token=internal_csrf_token,
         secure_cookies=tls_enabled,
+    )
+    add_inner_csrf_cookie_middleware(
+        inner,
+        csrf_token=internal_csrf_token,
+        secure=tls_enabled,
+        session_hours=config.session_hours,
     )
     server_holder: dict[str, Any] = {}
 
@@ -351,6 +383,7 @@ def run_service(
 
 
 __all__ = [
+    "add_inner_csrf_cookie_middleware",
     "restart_service",
     "run_service",
     "service_status",
