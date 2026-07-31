@@ -190,7 +190,20 @@ if not exist "%BOOTSTRAP_DIR%" mkdir "%BOOTSTRAP_DIR%" || exit /b 1
 echo [+] Installing the uv runtime bootstrapper
 set "UV_INSTALL_DIR=%BOOTSTRAP_DIR%"
 set "UV_NO_MODIFY_PATH=1"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 ^| iex" || exit /b 1
+set "UV_INSTALLER=%TEMP%\imr-sqliblind-uv-%RANDOM%%RANDOM%.ps1"
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri 'https://astral.sh/uv/install.ps1' -OutFile $env:UV_INSTALLER"
+if errorlevel 1 (
+  del /q "%UV_INSTALLER%" >nul 2>&1
+  echo [x] Unable to download the official uv installer 1>&2
+  exit /b 1
+)
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%UV_INSTALLER%"
+set "UV_INSTALL_EXIT=%ERRORLEVEL%"
+del /q "%UV_INSTALLER%" >nul 2>&1
+if not "%UV_INSTALL_EXIT%"=="0" (
+  echo [x] The official uv installer failed with exit code %UV_INSTALL_EXIT% 1>&2
+  exit /b %UV_INSTALL_EXIT%
+)
 if not exist "%UV_EXE%" (
   echo [x] uv installation did not create %UV_EXE% 1>&2
   exit /b 1
@@ -201,7 +214,7 @@ exit /b 0
 set "SQLIBLIND_ENV_HOME=%PREFIX%"
 set "SQLIBLIND_ENV_PYTHON=%VENV_PYTHON%"
 set "SQLIBLIND_ENV_BIN=%BIN_DIR%"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$homePath=$env:SQLIBLIND_ENV_HOME; $pythonPath=$env:SQLIBLIND_ENV_PYTHON; $bin=$env:SQLIBLIND_ENV_BIN; [Environment]::SetEnvironmentVariable('IMR_SQLIBLIND_HOME',$homePath,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_PYTHON',$pythonPath,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_BIN',$bin,'User'); $current=[Environment]::GetEnvironmentVariable('Path','User'); $items=@(); if($current){$items=$current.Split(';') ^| Where-Object { $_ -and $_.TrimEnd('\') -ine $bin.TrimEnd('\') }}; $items += $bin; [Environment]::SetEnvironmentVariable('Path',($items -join ';'),'User')" || exit /b 1
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $homePath=$env:SQLIBLIND_ENV_HOME; $pythonPath=$env:SQLIBLIND_ENV_PYTHON; $bin=$env:SQLIBLIND_ENV_BIN; [Environment]::SetEnvironmentVariable('IMR_SQLIBLIND_HOME',$homePath,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_PYTHON',$pythonPath,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_BIN',$bin,'User'); $current=[Environment]::GetEnvironmentVariable('Path','User'); $items=@(); if($current){ foreach($item in $current.Split(';')){ if($item -and $item.TrimEnd('\') -ine $bin.TrimEnd('\')){ $items += $item } } }; $items += $bin; [Environment]::SetEnvironmentVariable('Path',($items -join ';'),'User')" || exit /b 1
 exit /b 0
 
 :mkdir_failed
