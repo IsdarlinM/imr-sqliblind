@@ -37,6 +37,12 @@ class NativeInstallerTests(unittest.TestCase):
         self.assertIn("$HOME/.bashrc", content)
         self.assertIn("$HOME/.zshrc", content)
 
+    def test_installers_initialize_service_config_without_overwriting_it(self) -> None:
+        linux = self.read("install.sh")
+        windows = self.read("install.cmd")
+        self.assertIn('"$BIN_DIR/$COMMAND_NAME" config init', linux)
+        self.assertIn('call "%BIN_DIR%\\sqliblind.cmd" config init', windows)
+
     def test_windows_installer_declares_python_310_and_managed_fallback(self) -> None:
         content = self.read("install.cmd")
         self.assertTrue(content.casefold().startswith("@echo off"))
