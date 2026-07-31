@@ -65,6 +65,7 @@ set "VENV_COMMAND=%VENV_DIR%\Scripts\sqliblind.exe"
 set "COMMAND_PATH=%BIN_DIR%\sqliblind.cmd"
 set "PYTHON_EXE="
 set "PYTHON_ARGS="
+set "USE_MANAGED_PYTHON=0"
 
 if not exist "%PREFIX%" mkdir "%PREFIX%" || goto mkdir_failed
 
@@ -110,45 +111,46 @@ if not errorlevel 1 (
   )
 )
 
-call :install_uv || exit /b 1
-echo [+] Installing managed Python %MANAGED_PYTHON%
-"%UV_EXE%" python install %MANAGED_PYTHON% || exit /b 1
-set "PYTHON_FILE=%TEMP%\imr-sqliblind-python-%RANDOM%.txt"
-"%UV_EXE%" python find %MANAGED_PYTHON% > "%PYTHON_FILE%" || exit /b 1
-set /p "PYTHON_EXE=" < "%PYTHON_FILE%"
-del /q "%PYTHON_FILE%" >nul 2>&1
-if not defined PYTHON_EXE (
-  echo [x] uv did not return a Python executable 1>&2
-  exit /b 1
-)
+set "USE_MANAGED_PYTHON=1"
+echo [+] No compatible system Python found; using managed Python %MANAGED_PYTHON%
 
 :python_ready
-"%PYTHON_EXE%" %PYTHON_ARGS% -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
-if errorlevel 1 (
-  echo [x] Unable to locate Python 3.10 or newer 1>&2
-  exit /b 1
+if "%USE_MANAGED_PYTHON%"=="0" (
+  "%PYTHON_EXE%" %PYTHON_ARGS% -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
+  if errorlevel 1 (
+    echo [x] Unable to locate Python 3.10 or newer 1>&2
+    exit /b 1
+  )
 )
-for /f "delims=" %%V in ('"%PYTHON_EXE%" %PYTHON_ARGS% --version 2^>^&1') do echo [+] Using %%V
 
 if exist "%VENV_PYTHON%" (
   "%VENV_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
   if errorlevel 1 rmdir /s /q "%VENV_DIR%"
 )
 
-if not exist "%VENV_PYTHON%" (
-  echo [+] Creating isolated environment at %VENV_DIR%
-  "%PYTHON_EXE%" %PYTHON_ARGS% -m venv "%VENV_DIR%" >nul 2>&1
-  if errorlevel 1 (
-    call :install_uv || exit /b 1
-    if exist "%VENV_DIR%" rmdir /s /q "%VENV_DIR%"
-    "%UV_EXE%" venv --python %MANAGED_PYTHON% "%VENV_DIR%" || exit /b 1
-  )
-)
+if exist "%VENV_PYTHON%" goto environment_ready
 
+echo [+] Creating isolated environment at %VENV_DIR%
+if "%USE_MANAGED_PYTHON%"=="1" goto managed_environment
+
+"%PYTHON_EXE%" %PYTHON_ARGS% -m venv "%VENV_DIR%" >nul 2>&1
+if errorlevel 1 goto managed_environment
+goto environment_ready
+
+:managed_environment
+call :create_managed_environment || exit /b 1
+
+:environment_ready
 if not exist "%VENV_PYTHON%" (
   echo [x] Failed to create the Python environment 1>&2
   exit /b 1
 )
+"%VENV_PYTHON%" -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3,10) else 1)" >nul 2>&1
+if errorlevel 1 (
+  echo [x] The created Python environment is not Python 3.10 or newer 1>&2
+  exit /b 1
+)
+for /f "delims=" %%V in ('"%VENV_PYTHON%" --version 2^>^&1') do echo [+] Using %%V
 
 echo [+] Installing project dependencies and web console
 "%VENV_PYTHON%" -m ensurepip --upgrade >nul 2>&1
@@ -211,6 +213,14 @@ set "FINAL_COMMAND=%COMMAND_PATH%"
 set "FINAL_NATIVE=%VENV_COMMAND%"
 set "FINAL_PATH=%PATH%"
 endlocal & set "IMR_SQLIBLIND_HOME=%FINAL_HOME%" & set "SQLIBLIND_PYTHON=%FINAL_PYTHON%" & set "SQLIBLIND_BIN=%FINAL_BIN%" & set "SQLIBLIND_COMMAND=%FINAL_COMMAND%" & set "SQLIBLIND_NATIVE_COMMAND=%FINAL_NATIVE%" & set "PATH=%FINAL_PATH%"
+exit /b 0
+
+:create_managed_environment
+call :install_uv || exit /b 1
+echo [+] Installing managed Python %MANAGED_PYTHON%
+"%UV_EXE%" python install --no-config "%MANAGED_PYTHON%" || exit /b 1
+if exist "%VENV_DIR%" rmdir /s /q "%VENV_DIR%"
+"%UV_EXE%" venv --no-config --managed-python --python "%MANAGED_PYTHON%" "%VENV_DIR%" || exit /b 1
 exit /b 0
 
 :install_uv
