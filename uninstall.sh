@@ -61,9 +61,14 @@ remove_profile_block() {
 }
 
 if ((NO_PATH == 0)); then
-  remove_profile_block "$HOME/.profile"
-  remove_profile_block "$HOME/.bashrc"
-  remove_profile_block "$HOME/.zshrc"
+  for profile in \
+    "$HOME/.profile" \
+    "$HOME/.bash_profile" \
+    "$HOME/.bashrc" \
+    "$HOME/.zprofile" \
+    "$HOME/.zshrc"; do
+    remove_profile_block "$profile"
+  done
 fi
 
 printf 'imr-sqliblind was removed. Open a new shell to refresh PATH.\n'
