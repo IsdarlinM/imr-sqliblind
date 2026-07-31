@@ -46,6 +46,25 @@ class NativeInstallerTests(unittest.TestCase):
         self.assertIn("-m venv", content)
         self.assertIn("sqliblind.cmd", content)
 
+    def test_windows_uv_bootstrap_avoids_cmd_pipe_and_caret_parsing(self) -> None:
+        content = self.read("install.cmd")
+        self.assertIn('set "UV_INSTALLER=%TEMP%\\imr-sqliblind-uv-', content)
+        self.assertIn("Invoke-WebRequest -UseBasicParsing", content)
+        self.assertIn("-Uri 'https://astral.sh/uv/install.ps1'", content)
+        self.assertIn("-OutFile $env:UV_INSTALLER", content)
+        self.assertIn('-File "%UV_INSTALLER%"', content)
+        self.assertIn('del /q "%UV_INSTALLER%"', content)
+        self.assertIn('set "UV_INSTALL_EXIT=%ERRORLEVEL%"', content)
+        self.assertNotIn("install.ps1 ^", content)
+        self.assertNotIn("^|", content)
+        self.assertNotIn("| iex", content.casefold())
+
+    def test_windows_path_persistence_avoids_powershell_pipeline(self) -> None:
+        content = self.read("install.cmd")
+        self.assertIn("foreach($item in $current.Split(';'))", content)
+        self.assertNotIn("Where-Object", content)
+        self.assertNotIn("^|", content)
+
     def test_windows_installer_updates_only_user_environment(self) -> None:
         content = self.read("install.cmd")
         self.assertIn("IMR_SQLIBLIND_HOME", content)
