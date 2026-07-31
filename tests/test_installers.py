@@ -21,7 +21,7 @@ class NativeInstallerTests(unittest.TestCase):
         content = self.read("install.sh")
         self.assertTrue(content.startswith("#!/usr/bin/env bash"))
         self.assertIn("MIN_PYTHON_MINOR=10", content)
-        self.assertIn("MANAGED_PYTHON=\"3.12\"", content)
+        self.assertIn('MANAGED_PYTHON="3.12"', content)
         self.assertIn("https://astral.sh/uv/install.sh", content)
         self.assertIn("python install", content)
         self.assertIn("-m venv", content)
@@ -34,14 +34,28 @@ class NativeInstallerTests(unittest.TestCase):
         self.assertIn("SQLIBLIND_BIN", content)
         self.assertIn("# >>> imr-sqliblind >>>", content)
         self.assertIn("$HOME/.profile", content)
+        self.assertIn("$HOME/.bash_profile", content)
         self.assertIn("$HOME/.bashrc", content)
+        self.assertIn("$HOME/.zprofile", content)
         self.assertIn("$HOME/.zshrc", content)
+
+    def test_linux_installer_activates_and_verifies_global_command(self) -> None:
+        content = self.read("install.sh")
+        self.assertIn("path_contains_bin", content)
+        self.assertIn("activate_and_verify_command", content)
+        self.assertIn('command -v "$COMMAND_NAME"', content)
+        self.assertIn('export PATH="$BIN_DIR:$PATH"', content)
+        self.assertIn('"$COMMAND_NAME" --version', content)
+        self.assertIn(
+            "PATH and user environment variables were configured automatically",
+            content,
+        )
 
     def test_installers_initialize_service_config_without_overwriting_it(self) -> None:
         linux = self.read("install.sh")
         windows = self.read("install.cmd")
-        self.assertIn('"$BIN_DIR/$COMMAND_NAME" config init', linux)
-        self.assertIn('call "%BIN_DIR%\\sqliblind.cmd" config init', windows)
+        self.assertIn('"$COMMAND_NAME" config init', linux)
+        self.assertIn("call sqliblind config init", windows)
 
     def test_windows_installer_declares_python_310_and_managed_fallback(self) -> None:
         content = self.read("install.cmd")
@@ -68,8 +82,29 @@ class NativeInstallerTests(unittest.TestCase):
     def test_windows_path_persistence_avoids_powershell_pipeline(self) -> None:
         content = self.read("install.cmd")
         self.assertIn("foreach($item in $current.Split(';'))", content)
+        self.assertIn("foreach($item in $persisted)", content)
         self.assertNotIn("Where-Object", content)
+        self.assertNotIn("ForEach-Object", content)
         self.assertNotIn("^|", content)
+
+    def test_windows_installer_updates_and_verifies_user_path(self) -> None:
+        content = self.read("install.cmd")
+        self.assertIn(
+            "SetEnvironmentVariable('Path',($items -join ';'),'User')",
+            content,
+        )
+        self.assertIn(
+            "The sqliblind bin directory was not persisted in the user PATH",
+            content,
+        )
+        self.assertIn(":activate_current_environment", content)
+        self.assertIn('set "PATH=%BIN_DIR%;%PATH%"', content)
+        self.assertIn("where /Q sqliblind", content)
+        self.assertIn("call sqliblind --version", content)
+        self.assertIn(
+            "PATH and user environment variables were configured automatically",
+            content,
+        )
 
     def test_windows_installer_updates_only_user_environment(self) -> None:
         content = self.read("install.cmd")
@@ -84,10 +119,15 @@ class NativeInstallerTests(unittest.TestCase):
         windows = self.read("uninstall.cmd")
         self.assertIn('rm -f "$BIN_DIR/sqliblind"', linux)
         self.assertIn("remove_profile_block", linux)
+        self.assertIn("$HOME/.bash_profile", linux)
+        self.assertIn("$HOME/.zprofile", linux)
         self.assertIn("sqliblind.cmd", windows)
         self.assertIn("SetEnvironmentVariable('IMR_SQLIBLIND_HOME',$null,'User')", windows)
         self.assertIn("SetEnvironmentVariable('SQLIBLIND_PYTHON',$null,'User')", windows)
         self.assertIn("SetEnvironmentVariable('SQLIBLIND_BIN',$null,'User')", windows)
+        self.assertIn("foreach($item in $current.Split(';'))", windows)
+        self.assertNotIn("Where-Object", windows)
+        self.assertNotIn("^|", windows)
 
     @unittest.skipUnless(shutil.which("bash"), "bash is not available")
     def test_linux_scripts_pass_bash_syntax_check(self) -> None:
