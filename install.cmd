@@ -9,6 +9,7 @@ if "%PROJECT_ROOT:~-1%"=="\" set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 set "PREFIX=%LOCALAPPDATA%\Programs\imr-sqliblind"
 set "NO_PATH=0"
 set "PYTHON_OVERRIDE="
+set "FORCE_MANAGED_PYTHON=0"
 
 :parse_args
 if "%~1"=="" goto args_done
@@ -23,6 +24,11 @@ if /I "%~1"=="--python" (
   if "%~2"=="" goto missing_python
   set "PYTHON_OVERRIDE=%~f2"
   shift
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--managed-python" (
+  set "FORCE_MANAGED_PYTHON=1"
   shift
   goto parse_args
 )
@@ -50,13 +56,19 @@ echo.
 echo Installs imr-sqliblind and the realtime web console for the current user.
 echo.
 echo Options:
-echo   --prefix PATH     Custom installation directory.
-echo   --python PATH     Preferred Python executable ^(must be Python 3.10+^).
-echo   --no-path         Do not persist environment variables or modify PATH.
-echo   -h, --help        Show this help.
+echo   --prefix PATH       Custom installation directory.
+echo   --python PATH       Preferred Python executable ^(must be Python 3.10+^).
+echo   --managed-python    Force the isolated Python 3.12 managed by uv.
+echo   --no-path           Do not persist environment variables or modify PATH.
+echo   -h, --help          Show this help.
 exit /b 0
 
 :args_done
+if "%FORCE_MANAGED_PYTHON%"=="1" if defined PYTHON_OVERRIDE (
+  echo [x] --python and --managed-python cannot be used together 1>&2
+  exit /b 2
+)
+
 set "BIN_DIR=%PREFIX%\bin"
 set "VENV_DIR=%PREFIX%\venv"
 set "BOOTSTRAP_DIR=%PREFIX%\bootstrap"
@@ -68,6 +80,12 @@ set "PYTHON_ARGS="
 set "USE_MANAGED_PYTHON=0"
 
 if not exist "%PREFIX%" mkdir "%PREFIX%" || goto mkdir_failed
+
+if "%FORCE_MANAGED_PYTHON%"=="1" (
+  set "USE_MANAGED_PYTHON=1"
+  echo [+] Managed Python %MANAGED_PYTHON% was explicitly requested
+  goto python_ready
+)
 
 if defined PYTHON_OVERRIDE (
   if not exist "%PYTHON_OVERRIDE%" (
