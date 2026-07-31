@@ -40,7 +40,7 @@ if exist "%PREFIX%\install.env" (
 
 if "%NO_PATH%"=="0" (
   set "SQLIBLIND_ENV_BIN=%BIN_DIR%"
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$bin=$env:SQLIBLIND_ENV_BIN; $current=[Environment]::GetEnvironmentVariable('Path','User'); $items=@(); if($current){$items=$current.Split(';') ^| Where-Object { $_ -and $_.TrimEnd('\') -ine $bin.TrimEnd('\') }}; [Environment]::SetEnvironmentVariable('Path',($items -join ';'),'User'); [Environment]::SetEnvironmentVariable('IMR_SQLIBLIND_HOME',$null,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_PYTHON',$null,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_BIN',$null,'User')" || exit /b 1
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$bin=$env:SQLIBLIND_ENV_BIN; $current=[Environment]::GetEnvironmentVariable('Path','User'); $items=@(); if($current){$items=$current.Split(';') ^| Where-Object { $_ -and $_.TrimEnd('\') -ine $bin.TrimEnd('\') }}; [Environment]::SetEnvironmentVariable('Path',($items -join ';'),'User'); [Environment]::SetEnvironmentVariable('IMR_SQLIBLIND_HOME',$null,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_PYTHON',$null,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_BIN',$null,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_COMMAND',$null,'User'); [Environment]::SetEnvironmentVariable('SQLIBLIND_NATIVE_COMMAND',$null,'User')" || exit /b 1
 )
 
 if exist "%BIN_DIR%\sqliblind.cmd" del /q "%BIN_DIR%\sqliblind.cmd"
