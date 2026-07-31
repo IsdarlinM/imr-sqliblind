@@ -51,13 +51,22 @@ class NativeInstallerTests(unittest.TestCase):
     def test_windows_installer_declares_python_310_and_managed_fallback(self) -> None:
         content = self.read("install.cmd")
         self.assertTrue(content.casefold().startswith("@echo off"))
-        self.assertIn("sys.version_info ^>= (3,10)", content)
+        self.assertIn("PYTHON_VERSION_CHECK=", content)
+        self.assertIn("sys.version_info.minor in range(10,100)", content)
         self.assertIn("MANAGED_PYTHON=3.12", content)
         self.assertIn("https://astral.sh/uv/install.ps1", content)
         self.assertIn("--managed-python", content)
         self.assertIn("venv --no-config --managed-python", content)
         self.assertNotIn("uv python find", content.casefold())
         self.assertIn("sqliblind.cmd", content)
+
+    def test_windows_python_version_check_is_cmd_safe_and_reused(self) -> None:
+        content = self.read("install.cmd")
+        self.assertNotIn("sys.version_info ^>=", content)
+        self.assertNotIn("sys.version_info >=", content)
+        self.assertNotIn("sys.version_info ^<=", content)
+        self.assertNotIn("sys.version_info <=", content)
+        self.assertGreaterEqual(content.count('-c "%PYTHON_VERSION_CHECK%"'), 7)
 
     def test_windows_uv_bootstrap_avoids_cmd_pipe_and_caret_parsing(self) -> None:
         content = self.read("install.cmd")
