@@ -37,20 +37,14 @@ def _table_widths(
         ]
         widths.append(min(max(len(value) for value in values), max_column_width))
 
-    minimums = [
-        min(max(3, len(_flat_text(header))), width)
-        for header, width in zip(headers, widths, strict=True)
-    ]
+    minimums = [3] * columns
     while sum(widths) + 3 * columns + 1 > max_table_width:
         candidates = [
             index for index, width in enumerate(widths) if width > minimums[index]
         ]
         if not candidates:
             break
-        selected = max(
-            candidates,
-            key=lambda index: widths[index] - minimums[index],
-        )
+        selected = max(candidates, key=lambda index: widths[index] - minimums[index])
         widths[selected] -= 1
     return widths
 
@@ -109,13 +103,7 @@ def render_ascii_tables(database: DatabaseMap) -> str:
         ("Cells", database.cell_count),
         ("Relationships", database.relationship_count),
     ]
-    lines.append(
-        ascii_table(
-            ("Entity", "Count"),
-            summary_rows,
-            max_table_width=64,
-        )
-    )
+    lines.append(ascii_table(("Entity", "Count"), summary_rows, max_table_width=64))
 
     if not database.schemas:
         lines.extend(("", "(no schemas found)"))
@@ -222,10 +210,7 @@ def render_html_tables(
             qualified = f"{schema.name}.{table.name}"
             columns = _html_table(
                 ("#", "Column"),
-                (
-                    (index, column)
-                    for index, column in enumerate(table.columns, 1)
-                ),
+                ((index, column) for index, column in enumerate(table.columns, 1)),
                 css_class="columns-table",
             )
             data = '<p class="empty">Rows not extracted.</p>'
@@ -234,10 +219,7 @@ def render_html_tables(
                 data = _html_table(
                     ("Row", *data_columns),
                     (
-                        (
-                            index,
-                            *(row.get(column, "") for column in data_columns),
-                        )
+                        (index, *(row.get(column, "") for column in data_columns))
                         for index, row in enumerate(table.rows, 1)
                     ),
                     css_class="data-table",
