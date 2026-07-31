@@ -68,6 +68,7 @@ def load_asset(name: str) -> str:
             "web-menu.js",
             "web-menu-runtime.js",
             "table-view.js",
+            "table-view-runtime.js",
         ],
     }.get(name, [])
     for companion in companions:
