@@ -6,9 +6,9 @@ import tempfile
 from pathlib import Path
 
 from .models import DatabaseMap
+from .table_reports import render_ascii_tables, render_html_tables
 
-
-FORMATS = {"tree", "relations", "mermaid", "html"}
+FORMATS = {"tree", "relations", "mermaid", "html", "tables", "html-tables"}
 
 
 def render_tree(database: DatabaseMap, *, ascii_only: bool = False) -> str:
@@ -27,14 +27,18 @@ def render_tree(database: DatabaseMap, *, ascii_only: bool = False) -> str:
         for table_index, table in enumerate(schema.tables):
             table_last = table_index == len(schema.tables) - 1
             lines.append(
-                f"{schema_prefix}{last if table_last else branch}[TABLE] {table.name}"
+                f"{schema_prefix}{last if table_last else branch}"
+                f"[TABLE] {table.name}"
             )
             table_prefix = schema_prefix + (blank if table_last else vertical)
             children: list[tuple[str, str]] = [
                 ("COLUMN", column) for column in table.columns
             ] + [("ROW", f"row {index + 1}") for index in range(len(table.rows))]
             if not children:
-                lines.append(f"{table_prefix}{last}(columns not enumerated; no rows extracted)")
+                lines.append(
+                    f"{table_prefix}{last}"
+                    "(columns not enumerated; no rows extracted)"
+                )
             for child_index, (kind, value) in enumerate(children):
                 child_last = child_index == len(children) - 1
                 connector = last if child_last else branch
@@ -44,9 +48,12 @@ def render_tree(database: DatabaseMap, *, ascii_only: bool = False) -> str:
                     row_prefix = table_prefix + (blank if child_last else vertical)
                     cells = list(row.items())
                     for cell_index, (column, cell_value) in enumerate(cells):
-                        cell_connector = last if cell_index == len(cells) - 1 else branch
+                        cell_connector = (
+                            last if cell_index == len(cells) - 1 else branch
+                        )
                         lines.append(
-                            f"{row_prefix}{cell_connector}[CELL] {column}={cell_value}"
+                            f"{row_prefix}{cell_connector}[CELL] "
+                            f"{column}={cell_value}"
                         )
     lines.extend(
         [
@@ -70,12 +77,14 @@ def render_relations(database: DatabaseMap) -> str:
             lines.append(f'[SCHEMA] "{schema.name}" -> [TABLE] "{table.name}"')
             for column in table.columns:
                 lines.append(
-                    f'[TABLE] "{schema.name}.{table.name}" -> [COLUMN] "{column}"'
+                    f'[TABLE] "{schema.name}.{table.name}" '
+                    f'-> [COLUMN] "{column}"'
                 )
             for row_index, row in enumerate(table.rows):
                 row_name = f"row {row_index + 1}"
                 lines.append(
-                    f'[TABLE] "{schema.name}.{table.name}" -> [ROW] "{row_name}"'
+                    f'[TABLE] "{schema.name}.{table.name}" '
+                    f'-> [ROW] "{row_name}"'
                 )
                 for column, value in row.items():
                     lines.append(
@@ -123,7 +132,9 @@ def render_mermaid(database: DatabaseMap) -> str:
             for column in table.columns:
                 column_id = f"n{node}"
                 node += 1
-                lines.append(f'  {column_id}["column: {_mermaid_label(column)}"]')
+                lines.append(
+                    f'  {column_id}["column: {_mermaid_label(column)}"]'
+                )
                 lines.append(f"  {table_id} --> {column_id}")
             for row_index, row in enumerate(table.rows):
                 row_id = f"n{node}"
@@ -157,7 +168,8 @@ def _render_html_schemas(database: DatabaseMap) -> str:
             for index, row in enumerate(table.rows):
                 cells = "".join(
                     '<li><span class="kind">CELL</span>'
-                    f"<code>{html.escape(column)}={html.escape(str(value))}</code></li>"
+                    f"<code>{html.escape(column)}="
+                    f"{html.escape(str(value))}</code></li>"
                     for column, value in row.items()
                 )
                 rows.append(
@@ -166,22 +178,26 @@ def _render_html_schemas(database: DatabaseMap) -> str:
                 )
             row_html = "".join(rows) or '<p class="empty">Rows not extracted.</p>'
             tables.append(
-                '<details class="table" open><summary><span class="kind">TABLE</span>'
+                '<details class="table" open><summary>'
+                '<span class="kind">TABLE</span>'
                 f"<code>{html.escape(table.name)}</code></summary>"
-                f'<ul class="columns">{columns}</ul><div class="rows">{row_html}</div>'
-                "</details>"
+                f'<ul class="columns">{columns}</ul>'
+                f'<div class="rows">{row_html}</div></details>'
             )
+        tables_html = "".join(tables) or '<p class="empty">No tables.</p>'
         sections.append(
-            '<details class="schema" open><summary><span class="kind">SCHEMA</span>'
+            '<details class="schema" open><summary>'
+            '<span class="kind">SCHEMA</span>'
             f"<code>{html.escape(schema.name)}</code></summary>"
-            f'<div class="tables">{"".join(tables) or "<p class=empty>No tables.</p>"}</div>'
-            "</details>"
+            f'<div class="tables">{tables_html}</div></details>'
         )
     return "".join(sections)
 
 
 def render_html(
-    database: DatabaseMap, *, title: str = "imr-sqliblind schema map"
+    database: DatabaseMap,
+    *,
+    title: str = "imr-sqliblind schema map",
 ) -> str:
     safe_title = html.escape(title)
     graph = _render_html_schemas(database)
@@ -319,11 +335,18 @@ def render_database_map(
         return render_relations(database)
     if selected == "mermaid":
         return render_mermaid(database)
+    if selected == "tables":
+        return render_ascii_tables(database)
+    if selected == "html-tables":
+        return render_html_tables(database, title=title)
     return render_html(database, title=title)
 
 
 def write_report(
-    path: str | Path, content: str, *, default_suffix: str = ".txt"
+    path: str | Path,
+    content: str,
+    *,
+    default_suffix: str = ".txt",
 ) -> Path:
     destination = Path(path).expanduser()
     if not destination.suffix:

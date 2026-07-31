@@ -61,11 +61,14 @@ def load_asset(name: str) -> str:
             "graph-interactions.css",
             "web-menu.css",
             "web-menu-compat.css",
+            "table-view.css",
         ],
         "inference-options.js": [
             "graph-interactions.js",
             "web-menu.js",
             "web-menu-runtime.js",
+            "table-view.js",
+            "table-view-runtime.js",
         ],
     }.get(name, [])
     for companion in companions:

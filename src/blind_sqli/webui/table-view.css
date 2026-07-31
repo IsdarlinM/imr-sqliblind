@@ -1,0 +1,133 @@
+.entity-tables-pane {
+  min-width: 0;
+}
+
+.entity-table-grid {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.entity-table-card {
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  background: var(--panel-strong);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  content-visibility: auto;
+  contain-intrinsic-size: 420px;
+}
+
+.entity-table-card:hover {
+  border-color: var(--line-strong);
+}
+
+.entity-table-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.entity-table-card h3,
+.entity-table-card h4 {
+  margin: 0;
+}
+
+.entity-table-card h3 {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.entity-table-card h4 {
+  margin-top: 12px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.entity-table-kind,
+.entity-table-counts {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.entity-table-kind {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.entity-table-scroll {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  scrollbar-gutter: stable;
+}
+
+.entity-table {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: collapse;
+  white-space: nowrap;
+}
+
+.entity-table th,
+.entity-table td {
+  max-width: 360px;
+  padding: 7px 9px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.entity-table th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  color: var(--accent);
+  background: #10243a;
+  font-size: 11px;
+}
+
+.entity-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.entity-table th:last-child,
+.entity-table td:last-child {
+  border-right: 0;
+}
+
+.entity-table tbody tr:hover td {
+  background: rgb(79 209 161 / 0.05);
+}
+
+.entity-table-empty {
+  color: var(--muted);
+  white-space: normal;
+}
+
+@media (max-width: 620px) {
+  .entity-table-card {
+    padding: 9px;
+  }
+
+  .entity-table-card-head {
+    display: grid;
+  }
+
+  .entity-table th,
+  .entity-table td {
+    max-width: 240px;
+    padding: 7px 8px;
+  }
+}
