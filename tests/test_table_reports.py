@@ -30,19 +30,27 @@ class TableReportTests(unittest.TestCase):
         )
         return DatabaseMap([Schema("main", [table])])
 
-    def test_ascii_table_renderer_uses_ascii_borders_and_bounded_width(self) -> None:
+    def test_ascii_table_renderer_uses_ascii_borders_and_bounded_width(
+        self,
+    ) -> None:
         output = render_database_map(self.database(), output_format="tables")
         self.assertIn("DATABASE TABLE VIEW", output)
         self.assertIn("TABLE main.User_Profile%", output)
         self.assertIn("_marker", output)
         self.assertIn("%", output)
         self.assertNotIn("├", output)
+        allowed = set(
+            "+-| 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "abcdefghijklmnopqrstuvwxyz_%.@<>/()':"
+        )
         for line in output.splitlines():
             self.assertLessEqual(len(line), 180)
             if line.startswith(("+", "|")):
-                self.assertTrue(set(line) <= set("+-| 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_%.@<>/()':"))
+                self.assertTrue(set(line) <= allowed)
 
-    def test_html_table_renderer_escapes_values_and_is_self_contained(self) -> None:
+    def test_html_table_renderer_escapes_values_and_is_self_contained(
+        self,
+    ) -> None:
         output = render_database_map(
             self.database(),
             output_format="html-tables",
@@ -80,7 +88,10 @@ class TableReportTests(unittest.TestCase):
                 render_database_map(self.database(), output_format="tables"),
             )
             self.assertEqual(path.suffix, ".txt")
-            self.assertIn("User_Profile%", path.read_text(encoding="utf-8"))
+            self.assertIn(
+                "User_Profile%",
+                path.read_text(encoding="utf-8"),
+            )
 
 
 if __name__ == "__main__":
