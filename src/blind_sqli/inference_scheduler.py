@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
@@ -29,14 +30,15 @@ class InferenceSchedulingMixin:
             "id": identifier,
             "operation": operation,
             "target": target,
-            "detail": "measuring value length",
-            "kind": "extraction",
-            "status": "running",
+            "detail": "queued for extraction",
+            "kind": "batch",
+            "status": "queued",
+            "active": False,
             "worker": f"scheduler-{index + 1}",
             "requests_used": self.client.requests_used,
             "_started_monotonic": time.monotonic(),
         }
-        self._emit("activity.started", activity=self._activity_payload(value))
+        self._emit("activity.queued", activity=self._activity_payload(value))
         return value
 
     def _update_batch_activity(
@@ -63,12 +65,135 @@ class InferenceSchedulingMixin:
         started = float(value.pop("_started_monotonic", time.monotonic()))
         value.update(
             status="failed" if failed else "completed",
+            active=False,
             detail=failed[:240] if failed else "extraction complete",
             elapsed_seconds=round(time.monotonic() - started, 6),
             requests_used=self.client.requests_used,
         )
         event = "activity.failed" if failed else "activity.completed"
         self._emit(event, activity=self._activity_payload(value))
+
+    def _worker_activity_store(self) -> dict[str, dict[str, object]]:
+        with self._activity_lock:
+            value = getattr(self, "_live_worker_activities", None)
+            if value is None:
+                value = {}
+                self._live_worker_activities = value
+            return value
+
+    def _activate_worker_activity(
+        self,
+        operation: str,
+        target: str,
+        detail: str,
+    ) -> str:
+        thread = threading.current_thread()
+        identifier = (
+            f"worker:{self.events.scan_id}:{thread.ident or threading.get_ident()}"
+        )
+        now = time.monotonic()
+        with self._activity_lock:
+            workers = getattr(self, "_live_worker_activities", None)
+            if workers is None:
+                workers = {}
+                self._live_worker_activities = workers
+            value = workers.get(identifier)
+            if value is None:
+                value = {
+                    "id": identifier,
+                    "operation": operation,
+                    "target": target,
+                    "detail": detail,
+                    "kind": "worker",
+                    "status": "running",
+                    "active": True,
+                    "worker": thread.name,
+                    "requests_used": self.client.requests_used,
+                    "_started_monotonic": now,
+                    "_last_emit": 0.0,
+                }
+                workers[identifier] = value
+                event = "activity.started"
+            else:
+                value.update(
+                    operation=operation,
+                    target=target,
+                    detail=detail,
+                    kind="worker",
+                    status="running",
+                    active=True,
+                    worker=thread.name,
+                    requests_used=self.client.requests_used,
+                )
+                event = "activity.updated"
+
+            should_emit = (
+                event == "activity.started"
+                or now - float(value.get("_last_emit", 0.0)) >= 0.04
+            )
+            if should_emit:
+                value["_last_emit"] = now
+                payload = self._activity_payload(value)
+            else:
+                payload = None
+
+        if payload is not None:
+            self._emit(event, activity=payload)
+        return identifier
+
+    def _finish_worker_activities(
+        self,
+        identifiers: set[str],
+        *,
+        failed: str | None = None,
+    ) -> None:
+        for identifier in sorted(identifiers):
+            with self._activity_lock:
+                workers = getattr(self, "_live_worker_activities", None)
+                if not workers:
+                    continue
+                value = workers.pop(identifier, None)
+                if value is None:
+                    continue
+                started = float(
+                    value.pop("_started_monotonic", time.monotonic())
+                )
+                value.update(
+                    status="failed" if failed else "completed",
+                    active=False,
+                    detail=failed[:240] if failed else "worker idle",
+                    elapsed_seconds=round(time.monotonic() - started, 6),
+                    requests_used=self.client.requests_used,
+                )
+                payload = self._activity_payload(value)
+            event = "activity.failed" if failed else "activity.completed"
+            self._emit(event, activity=payload)
+
+    def _execute_worker_task(
+        self,
+        used_workers: set[str],
+        used_lock: threading.Lock,
+        operation: str,
+        target: str,
+        detail: str,
+        function: Callable[..., R],
+        *args: object,
+    ) -> R:
+        identifier = self._activate_worker_activity(
+            operation,
+            target,
+            detail,
+        )
+        with used_lock:
+            used_workers.add(identifier)
+        try:
+            return function(*args)
+        except Exception as exc:
+            self._finish_worker_activities(
+                {identifier},
+                failed=str(exc),
+            )
+            raise
 
     def _parallel_map(
         self,
@@ -85,7 +210,7 @@ class InferenceSchedulingMixin:
         def tracked(index: int, item: T) -> R:
             if activity_factory is None:
                 operation, target = job_activity(item)
-                detail = "queued on worker"
+                detail = "running on worker"
             else:
                 operation, target, detail = activity_factory(item, index)
             with self.activity(operation, target, detail=detail):
@@ -112,6 +237,57 @@ class InferenceSchedulingMixin:
                 raise
         return [value for value in values if value is not None]
 
+    def _measure_job_lengths(
+        self,
+        jobs: list[ExtractionJob],
+        maximum_length: int,
+        activities: list[dict[str, object]],
+    ) -> list[tuple[int, bool]]:
+        lengths: list[tuple[int, bool] | None] = [None] * len(jobs)
+        workers = min(self.config.workers, max(1, len(jobs)))
+        used_workers: set[str] = set()
+        used_lock = threading.Lock()
+
+        def measure(index: int, job: ExtractionJob) -> tuple[int, bool]:
+            operation, target = job_activity(job)
+            return self._execute_worker_task(
+                used_workers,
+                used_lock,
+                operation,
+                target,
+                "measuring value length",
+                self.infer_integer_capped,
+                self.dialect.length_expression(job.expression),
+                maximum_length,
+            )
+
+        try:
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="sqliblind-length",
+            ) as executor:
+                future_map = {
+                    executor.submit(measure, index, job): index
+                    for index, job in enumerate(jobs)
+                }
+                for future in as_completed(future_map):
+                    index = future_map[future]
+                    lengths[index] = future.result()
+                    activities[index]["detail"] = (
+                        f"length resolved: {lengths[index][0]}"
+                    )
+                    self._emit(
+                        "activity.updated",
+                        activity=self._activity_payload(activities[index]),
+                    )
+        finally:
+            self._finish_worker_activities(used_workers)
+
+        return [
+            value if value is not None else (0, False)
+            for value in lengths
+        ]
+
     def _extract_jobs(
         self,
         jobs: list[ExtractionJob],
@@ -125,37 +301,13 @@ class InferenceSchedulingMixin:
             self._start_batch_activity(job, index)
             for index, job in enumerate(jobs)
         ]
-        lengths: list[tuple[int, bool] | None] = [None] * len(jobs)
-        workers = min(self.config.workers, max(1, len(jobs)))
 
         try:
-            with ThreadPoolExecutor(
-                max_workers=workers,
-                thread_name_prefix="sqliblind-length",
-            ) as executor:
-                future_map = {
-                    executor.submit(
-                        self.infer_integer_capped,
-                        self.dialect.length_expression(job.expression),
-                        maximum_length,
-                    ): index
-                    for index, job in enumerate(jobs)
-                }
-                for future in as_completed(future_map):
-                    index = future_map[future]
-                    lengths[index] = future.result()
-                    activities[index]["detail"] = (
-                        f"length resolved: {lengths[index][0]}"
-                    )
-                    self._emit(
-                        "activity.updated",
-                        activity=self._activity_payload(activities[index]),
-                    )
-
-            resolved_lengths = [
-                value if value is not None else (0, False)
-                for value in lengths
-            ]
+            resolved_lengths = self._measure_job_lengths(
+                jobs,
+                maximum_length,
+                activities,
+            )
             char_results: list[list[str | None]] = [
                 [None] * length for length, _ in resolved_lengths
             ]
@@ -215,7 +367,7 @@ class InferenceSchedulingMixin:
             return results
         except Exception as exc:
             for activity in activities:
-                if activity.get("status") == "running":
+                if activity.get("status") not in {"completed", "failed"}:
                     self._finish_batch_activity(activity, failed=str(exc))
             raise
 
@@ -227,22 +379,37 @@ class InferenceSchedulingMixin:
         activities: list[dict[str, object]],
         complete: Callable[[int], None],
     ) -> None:
-        for index, job in enumerate(jobs):
-            maximum = len(results[index])
-            for offset in range(maximum):
-                expression = self.dialect.char_code_expression(
-                    job.expression,
-                    offset + 1,
-                )
-                code = self._infer_character_code(expression, offset + 1)
-                results[index][offset] = chr(code)
-                self._update_batch_activity(
-                    activities[index],
-                    offset + 1,
-                    maximum,
-                )
-            remaining[index] = 0
-            complete(index)
+        used_workers: set[str] = set()
+        used_lock = threading.Lock()
+        try:
+            for index, job in enumerate(jobs):
+                maximum = len(results[index])
+                operation, target = job_activity(job)
+                for offset in range(maximum):
+                    expression = self.dialect.char_code_expression(
+                        job.expression,
+                        offset + 1,
+                    )
+                    code = self._execute_worker_task(
+                        used_workers,
+                        used_lock,
+                        operation,
+                        target,
+                        f"character {offset + 1}/{maximum}",
+                        self._infer_character_code,
+                        expression,
+                        offset + 1,
+                    )
+                    results[index][offset] = chr(code)
+                    self._update_batch_activity(
+                        activities[index],
+                        offset + 1,
+                        maximum,
+                    )
+                remaining[index] = 0
+                complete(index)
+        finally:
+            self._finish_worker_activities(used_workers)
 
     def _extract_positions_parallel(
         self,
@@ -254,34 +421,58 @@ class InferenceSchedulingMixin:
     ) -> None:
         total = sum(remaining)
         pool_size = min(self.config.workers, max(1, total))
-        with ThreadPoolExecutor(
-            max_workers=pool_size,
-            thread_name_prefix="sqliblind-char",
-        ) as executor:
-            futures: dict[Future[int], tuple[int, int]] = {}
-            for index, job in enumerate(jobs):
-                for offset in range(len(results[index])):
-                    expression = self.dialect.char_code_expression(
-                        job.expression,
-                        offset + 1,
+        used_workers: set[str] = set()
+        used_lock = threading.Lock()
+
+        def infer_position(
+            index: int,
+            offset: int,
+            expression: str,
+        ) -> int:
+            operation, target = job_activity(jobs[index])
+            return self._execute_worker_task(
+                used_workers,
+                used_lock,
+                operation,
+                target,
+                f"character {offset + 1}/{len(results[index])}",
+                self._infer_character_code,
+                expression,
+                offset + 1,
+            )
+
+        try:
+            with ThreadPoolExecutor(
+                max_workers=pool_size,
+                thread_name_prefix="sqliblind-char",
+            ) as executor:
+                futures: dict[Future[int], tuple[int, int]] = {}
+                for index, job in enumerate(jobs):
+                    for offset in range(len(results[index])):
+                        expression = self.dialect.char_code_expression(
+                            job.expression,
+                            offset + 1,
+                        )
+                        future = executor.submit(
+                            infer_position,
+                            index,
+                            offset,
+                            expression,
+                        )
+                        futures[future] = index, offset
+                for future in as_completed(futures):
+                    index, offset = futures[future]
+                    results[index][offset] = chr(future.result())
+                    remaining[index] -= 1
+                    completed = len(results[index]) - remaining[index]
+                    self._update_batch_activity(
+                        activities[index],
+                        completed,
+                        len(results[index]),
                     )
-                    future = executor.submit(
-                        self._infer_character_code,
-                        expression,
-                        offset + 1,
-                    )
-                    futures[future] = index, offset
-            for future in as_completed(futures):
-                index, offset = futures[future]
-                results[index][offset] = chr(future.result())
-                remaining[index] -= 1
-                completed = len(results[index]) - remaining[index]
-                self._update_batch_activity(
-                    activities[index],
-                    completed,
-                    len(results[index]),
-                )
-                complete(index)
+                    complete(index)
+        finally:
+            self._finish_worker_activities(used_workers)
 
     def _extract_positions_bitwise(
         self,
@@ -295,88 +486,176 @@ class InferenceSchedulingMixin:
         candidates = [[0] * len(values) for values in results]
         task_count = sum(remaining) * bits
         pool_size = min(self.config.workers, max(1, task_count))
+        used_workers: set[str] = set()
+        used_lock = threading.Lock()
 
-        with ThreadPoolExecutor(
-            max_workers=pool_size,
-            thread_name_prefix="sqliblind-bit",
-        ) as executor:
-            bit_futures: dict[Future[ProbeResult], tuple[int, int, int]] = {}
-            for index, job in enumerate(jobs):
-                for offset in range(len(results[index])):
-                    code_expression = self.dialect.char_code_expression(
-                        job.expression,
-                        offset + 1,
-                    )
-                    for bit in range(bits):
-                        mask = 1 << bit
-                        condition = f"(({code_expression}) & {mask}) <> 0"
-                        future = executor.submit(self.probe_condition, condition)
-                        bit_futures[future] = index, offset, mask
+        def probe_bit(
+            index: int,
+            offset: int,
+            bit: int,
+            condition: str,
+        ) -> ProbeResult:
+            operation, target = job_activity(jobs[index])
+            return self._execute_worker_task(
+                used_workers,
+                used_lock,
+                operation,
+                target,
+                (
+                    f"character {offset + 1}/{len(results[index])} · "
+                    f"bit {bit + 1}/{bits}"
+                ),
+                self.probe_condition,
+                condition,
+            )
 
-            for future in as_completed(bit_futures):
-                index, offset, mask = bit_futures[future]
-                self._metric("bit_probes")
-                if future.result().matched:
-                    candidates[index][offset] |= mask
+        def confirm_candidate(
+            index: int,
+            offset: int,
+            code_expression: str,
+            candidate: int,
+        ) -> bool:
+            operation, target = job_activity(jobs[index])
+            return self._execute_worker_task(
+                used_workers,
+                used_lock,
+                operation,
+                target,
+                (
+                    f"confirm character {offset + 1}/{len(results[index])} "
+                    f"as code {candidate}"
+                ),
+                self._confirm_candidate,
+                code_expression,
+                candidate,
+            )
 
-            confirm_futures: dict[
-                Future[bool],
-                tuple[int, int, str],
-            ] = {}
-            recover_now: list[tuple[int, int, str]] = []
-            for index, job in enumerate(jobs):
-                for offset, candidate in enumerate(candidates[index]):
-                    code_expression = self.dialect.char_code_expression(
-                        job.expression,
-                        offset + 1,
+        def recover_candidate(
+            index: int,
+            offset: int,
+            code_expression: str,
+        ) -> int:
+            operation, target = job_activity(jobs[index])
+            return self._execute_worker_task(
+                used_workers,
+                used_lock,
+                operation,
+                target,
+                f"recover character {offset + 1}/{len(results[index])}",
+                self._recover_character,
+                code_expression,
+                offset + 1,
+            )
+
+        try:
+            with ThreadPoolExecutor(
+                max_workers=pool_size,
+                thread_name_prefix="sqliblind-bit",
+            ) as executor:
+                bit_futures: dict[
+                    Future[ProbeResult],
+                    tuple[int, int, int],
+                ] = {}
+                for index, job in enumerate(jobs):
+                    for offset in range(len(results[index])):
+                        code_expression = self.dialect.char_code_expression(
+                            job.expression,
+                            offset + 1,
+                        )
+                        for bit in range(bits):
+                            mask = 1 << bit
+                            condition = f"(({code_expression}) & {mask}) <> 0"
+                            future = executor.submit(
+                                probe_bit,
+                                index,
+                                offset,
+                                bit,
+                                condition,
+                            )
+                            bit_futures[future] = index, offset, mask
+
+                for future in as_completed(bit_futures):
+                    index, offset, mask = bit_futures[future]
+                    self._metric("bit_probes")
+                    if future.result().matched:
+                        candidates[index][offset] |= mask
+
+                confirm_futures: dict[
+                    Future[bool],
+                    tuple[int, int, str],
+                ] = {}
+                recover_futures: dict[
+                    Future[int],
+                    tuple[int, int],
+                ] = {}
+                for index, job in enumerate(jobs):
+                    for offset, candidate in enumerate(candidates[index]):
+                        code_expression = self.dialect.char_code_expression(
+                            job.expression,
+                            offset + 1,
+                        )
+                        in_range = (
+                            self.config.min_char_code
+                            <= candidate
+                            <= self.config.max_char_code
+                        )
+                        if not in_range:
+                            future = executor.submit(
+                                recover_candidate,
+                                index,
+                                offset,
+                                code_expression,
+                            )
+                            recover_futures[future] = index, offset
+                            continue
+                        future = executor.submit(
+                            confirm_candidate,
+                            index,
+                            offset,
+                            code_expression,
+                            candidate,
+                        )
+                        confirm_futures[future] = (
+                            index,
+                            offset,
+                            code_expression,
+                        )
+
+                for future in as_completed(recover_futures):
+                    index, offset = recover_futures[future]
+                    self._complete_bitwise_position(
+                        index,
+                        offset,
+                        future.result(),
+                        results,
+                        remaining,
+                        activities,
+                        complete,
                     )
-                    in_range = (
-                        self.config.min_char_code
-                        <= candidate
-                        <= self.config.max_char_code
-                    )
-                    if not in_range:
-                        recover_now.append((index, offset, code_expression))
-                        continue
-                    future = executor.submit(
-                        self._confirm_candidate,
-                        code_expression,
+
+                for future in as_completed(confirm_futures):
+                    index, offset, code_expression = confirm_futures[future]
+                    candidate = candidates[index][offset]
+                    if future.result():
+                        self._record_code(candidate)
+                        self._metric("characters")
+                    else:
+                        candidate = recover_candidate(
+                            index,
+                            offset,
+                            code_expression,
+                        )
+                    self._complete_bitwise_position(
+                        index,
+                        offset,
                         candidate,
+                        results,
+                        remaining,
+                        activities,
+                        complete,
                     )
-                    confirm_futures[future] = index, offset, code_expression
-
-            for index, offset, code_expression in recover_now:
-                candidate = self._recover_character(code_expression, offset + 1)
-                self._complete_bitwise_position(
-                    index,
-                    offset,
-                    candidate,
-                    results,
-                    remaining,
-                    activities,
-                    complete,
-                )
-
-            for future in as_completed(confirm_futures):
-                index, offset, code_expression = confirm_futures[future]
-                candidate = candidates[index][offset]
-                if future.result():
-                    self._record_code(candidate)
-                    self._metric("characters")
-                else:
-                    candidate = self._recover_character(
-                        code_expression,
-                        offset + 1,
-                    )
-                self._complete_bitwise_position(
-                    index,
-                    offset,
-                    candidate,
-                    results,
-                    remaining,
-                    activities,
-                    complete,
-                )
+        finally:
+            self._finish_worker_activities(used_workers)
 
     def _complete_bitwise_position(
         self,
