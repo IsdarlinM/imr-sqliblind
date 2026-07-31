@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import os
-import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
@@ -62,7 +61,8 @@ class TerminalPresentationTests(unittest.TestCase):
             extract_terminal_options(["--color"])
 
     def test_no_color_environment_is_respected_in_auto_mode(self) -> None:
-        with patch.dict(os.environ, {"NO_COLOR": "1"}, clear=False):
+        environment = {"NO_COLOR": "1", "SQLIBLIND_COLOR": "auto"}
+        with patch.dict(os.environ, environment, clear=False):
             _, options = extract_terminal_options(["schemas"])
         self.assertEqual(options.color, "never")
 
@@ -79,10 +79,15 @@ class TerminalPresentationTests(unittest.TestCase):
         source = "Error: controlled failure\n"
         written = stream.write(source)
         rendered = destination.getvalue()
+        plain = (
+            rendered.replace(RED, "")
+            .replace("\x1b[1m", "")
+            .replace(RESET, "")
+        )
         self.assertEqual(written, len(source))
         self.assertIn(RED, rendered)
         self.assertIn(RESET, rendered)
-        self.assertEqual(rendered.replace(RED, "").replace("\x1b[1m", "").replace(RESET, ""), source)
+        self.assertEqual(plain, source)
 
     def test_forced_color_and_banner_are_rendered_in_a_tty(self) -> None:
         stdout = TtyBuffer()
