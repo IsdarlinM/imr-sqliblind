@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
+import os
+import threading
 from copy import deepcopy
 from dataclasses import asdict
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from .manager import SENSITIVE_HEADERS, ScanSettings
-
-DEFAULT_SCAN_SETTING_KEY = "web.default_scan"
 
 BUILTIN_SCAN_DEFAULTS: dict[str, Any] = {
     "url": "",
@@ -92,3 +95,59 @@ def normalize_saved_scan_defaults(raw: dict[str, Any]) -> dict[str, Any]:
     normalized["proxy"] = None
     normalized["reveal_sensitive_values"] = False
     return merged_scan_defaults(normalized)
+
+
+class DefaultScanProfileStore:
+    """Atomic local persistence for the web console's default scan profile."""
+
+    def __init__(self, session_database: str | Path) -> None:
+        database = Path(session_database).expanduser()
+        self.path = database.with_name("web-default-scan.json")
+        self._lock = threading.RLock()
+
+    def load(self) -> dict[str, Any]:
+        with self._lock:
+            if not self.path.exists():
+                return {
+                    "config": merged_scan_defaults(None),
+                    "saved": False,
+                    "updated_at": None,
+                }
+            try:
+                payload = json.loads(self.path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
+                return {
+                    "config": merged_scan_defaults(None),
+                    "saved": False,
+                    "updated_at": None,
+                }
+            config = payload.get("config")
+            if not isinstance(config, dict):
+                config = {}
+            return {
+                "config": merged_scan_defaults(config),
+                "saved": True,
+                "updated_at": payload.get("updated_at"),
+            }
+
+    def save(self, raw: dict[str, Any]) -> dict[str, Any]:
+        config = normalize_saved_scan_defaults(raw)
+        updated_at = datetime.now(timezone.utc).isoformat()
+        payload = {"config": config, "updated_at": updated_at}
+        encoded = json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.path.with_suffix(".json.tmp")
+            temporary.write_text(encoded + "\n", encoding="utf-8")
+            if os.name != "nt":
+                temporary.chmod(0o600)
+            temporary.replace(self.path)
+            if os.name != "nt":
+                self.path.chmod(0o600)
+        return {"config": config, "saved": True, "updated_at": updated_at}
