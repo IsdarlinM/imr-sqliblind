@@ -35,12 +35,16 @@ def default_workspace() -> Path:
     return root / "imr-sqliblind" / "workspaces"
 
 
-def load_ui(csrf_token: str, nonce: str) -> str:
-    document = (
+def _read_webui_file(name: str) -> str:
+    return (
         resources.files("blind_sqli")
-        .joinpath("webui/index.html")
+        .joinpath(f"webui/{name}")
         .read_text(encoding="utf-8")
     )
+
+
+def load_ui(csrf_token: str, nonce: str) -> str:
+    document = _read_webui_file("index.html")
     return (
         document.replace("__CSRF__", html.escape(csrf_token, quote=True))
         .replace("__NONCE__", html.escape(nonce, quote=True))
@@ -51,8 +55,11 @@ def load_ui(csrf_token: str, nonce: str) -> str:
 def load_asset(name: str) -> str:
     if name not in {"app.css", "app.js", "inference-options.js"}:
         raise ValueError("unsupported web asset")
-    return (
-        resources.files("blind_sqli")
-        .joinpath(f"webui/{name}")
-        .read_text(encoding="utf-8")
-    )
+    content = _read_webui_file(name)
+    companion = {
+        "app.css": "graph-interactions.css",
+        "inference-options.js": "graph-interactions.js",
+    }.get(name)
+    if companion:
+        content = f"{content.rstrip()}\n\n{_read_webui_file(companion)}"
+    return content

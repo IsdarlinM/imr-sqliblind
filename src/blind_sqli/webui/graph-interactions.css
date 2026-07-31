@@ -1,0 +1,131 @@
+.graph-node,
+.graph-edge {
+  transition:
+    opacity 140ms ease,
+    filter 140ms ease,
+    stroke 140ms ease,
+    stroke-width 140ms ease;
+}
+
+.graph-node-muted {
+  opacity: 0.13;
+  filter: saturate(0.3);
+}
+
+.graph-node-related {
+  opacity: 1;
+  filter: drop-shadow(0 0 7px rgb(79 209 161 / 0.42));
+}
+
+.graph-node-focused {
+  opacity: 1;
+  filter: drop-shadow(0 0 10px rgb(255 209 102 / 0.58));
+}
+
+.graph-node-related .node-circle {
+  stroke: #4fd1a1 !important;
+  stroke-width: 2.4 !important;
+}
+
+.graph-node-focused .node-circle {
+  stroke: #ffd166 !important;
+  stroke-width: 3 !important;
+}
+
+.graph-node-selected .node-circle {
+  stroke-dasharray: 3 2;
+}
+
+.graph-node-related .node-label,
+.graph-node-focused .node-label {
+  fill: #fff;
+  font-weight: 800;
+}
+
+.graph-edge-related {
+  opacity: 1;
+  stroke: #4fd1a1;
+  stroke-width: 3;
+  filter: drop-shadow(0 0 4px rgb(79 209 161 / 0.45));
+}
+
+.graph-edge-muted {
+  opacity: 0.08;
+}
+
+.graph-node-tooltip {
+  position: absolute;
+  z-index: 8;
+  width: min(320px, calc(100% - 16px));
+  max-height: min(360px, calc(100% - 16px));
+  padding: 11px 12px;
+  overflow: auto;
+  color: var(--text);
+  background: rgb(8 20 33 / 0.96);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  box-shadow: 0 14px 36px rgb(0 0 0 / 0.38);
+  pointer-events: none;
+  backdrop-filter: blur(10px);
+  overflow-wrap: anywhere;
+}
+
+.graph-node-tooltip[hidden] {
+  display: none;
+}
+
+.graph-node-tooltip-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.graph-node-tooltip-heading span {
+  padding: 3px 6px;
+  color: var(--accent);
+  background: rgb(79 209 161 / 0.1);
+  border: 1px solid rgb(79 209 161 / 0.28);
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.graph-node-tooltip-heading strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.graph-node-tooltip-body {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.graph-node-tooltip-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.38fr) minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  font-size: 11px;
+}
+
+.graph-node-tooltip-row > span {
+  color: var(--muted);
+}
+
+.graph-node-tooltip-row > strong {
+  min-width: 0;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 620px) {
+  .graph-node-tooltip {
+    width: min(280px, calc(100% - 16px));
+    max-height: 240px;
+  }
+}
