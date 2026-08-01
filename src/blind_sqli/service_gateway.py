@@ -14,6 +14,8 @@ USER_CSRF_COOKIE = "sqliblind_user_csrf"
 LOGIN_CSRF_COOKIE = "sqliblind_login_csrf"
 _INTERNAL_TOKEN_HEADER = b"x-sqliblind-token"
 _SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+_LOGIN_TOKEN_TTL_SECONDS = 600.0
+_MAX_LOGIN_TOKENS = 2048
 
 
 def _local_path(value: str | None, default: str = "/") -> str:
@@ -79,6 +81,48 @@ class LoginLimiter:
         self._attempts.pop(key, None)
 
 
+class LoginTokenStore:
+    """Issue bounded, one-time login CSRF tokens without relying on cookies."""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = _LOGIN_TOKEN_TTL_SECONDS,
+        max_tokens: int = _MAX_LOGIN_TOKENS,
+    ) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._max_tokens = max_tokens
+        self._tokens: dict[str, float] = {}
+
+    def _prune(self, now: float) -> None:
+        expired = [
+            token for token, expires_at in self._tokens.items() if expires_at < now
+        ]
+        for token in expired:
+            self._tokens.pop(token, None)
+
+        overflow = len(self._tokens) - self._max_tokens
+        if overflow > 0:
+            oldest = sorted(self._tokens, key=self._tokens.__getitem__)[:overflow]
+            for token in oldest:
+                self._tokens.pop(token, None)
+
+    def issue(self) -> str:
+        now = time.monotonic()
+        token = secrets.token_urlsafe(32)
+        self._tokens[token] = now + self._ttl_seconds
+        self._prune(now)
+        return token
+
+    def consume(self, token: str) -> bool:
+        if not token:
+            return False
+        now = time.monotonic()
+        expires_at = self._tokens.pop(token, None)
+        self._prune(now)
+        return expires_at is not None and expires_at >= now
+
+
 def create_service_gateway(
     inner_app: Any,
     *,
@@ -97,6 +141,7 @@ def create_service_gateway(
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     limiter = LoginLimiter()
+    login_tokens = LoginTokenStore()
 
     def session_for(request: Request) -> UserSession | None:
         return user_store.resolve_session(request.cookies.get(USER_SESSION_COOKIE))
@@ -222,7 +267,7 @@ def create_service_gateway(
         current = session_for(request)
         if current and not current.user.must_change_password:
             return RedirectResponse(_local_path(next), status_code=303)
-        login_csrf = secrets.token_urlsafe(24)
+        login_csrf = login_tokens.issue()
         body = f"""
 <h1>imr-sqliblind service</h1>
 <p>Sign in to the realtime console.</p>
@@ -236,27 +281,19 @@ def create_service_gateway(
 <p class="warning"><strong>First start:</strong> use <code>admin</code> / <code>admin</code>. A password change is mandatory immediately after login.</p>
 """
         response = HTMLResponse(_document("Sign in", body, request.state.csp_nonce))
-        response.set_cookie(
-            LOGIN_CSRF_COOKIE,
-            login_csrf,
-            httponly=True,
-            secure=secure_cookies,
-            samesite="strict",
-            path="/login",
-            max_age=600,
-        )
+        response.delete_cookie(LOGIN_CSRF_COOKIE, path="/login")
+        response.delete_cookie(LOGIN_CSRF_COOKIE, path="/")
         return response
 
     @app.post("/login")
     async def login(request: Request):
         form = _form_data(await request.body())
-        cookie_csrf = request.cookies.get(LOGIN_CSRF_COOKIE, "")
         supplied_csrf = form.get("csrf", "")
-        if not cookie_csrf or not secrets.compare_digest(cookie_csrf, supplied_csrf):
+        if not login_tokens.consume(supplied_csrf):
             return HTMLResponse(
                 _document(
                     "Sign in failed",
-                    '<h1>Sign in failed</h1><p class="error">Invalid request token.</p><a class="button" href="/login">Try again</a>',
+                    '<h1>Sign in failed</h1><p class="error">The request token is invalid or expired. Reload the sign-in page and try again.</p><a class="button" href="/login">Try again</a>',
                     request.state.csp_nonce,
                 ),
                 status_code=403,
@@ -312,6 +349,7 @@ def create_service_gateway(
             max_age=session_hours * 3600,
         )
         response.delete_cookie(LOGIN_CSRF_COOKIE, path="/login")
+        response.delete_cookie(LOGIN_CSRF_COOKIE, path="/")
         return response
 
     @app.get("/account/password", response_class=HTMLResponse)
