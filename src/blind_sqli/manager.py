@@ -45,9 +45,9 @@ class ScanSettings:
     length_tolerance: int = 0
     timeout: float = 10.0
     retries: int = 1
-    delay: float = 0.1
+    delay: float = 0.0
     max_requests: int = 5000
-    workers: int = 4
+    workers: int = 16
     max_length: int = 128
     max_items: int = 128
     min_char_code: int = 32
@@ -57,14 +57,14 @@ class ScanSettings:
     proxy: str | None = None
     insecure: bool = False
     skip_calibration: bool = False
-    include_data: bool = False
+    include_data: bool = True
     data_tables: set[str] = field(default_factory=set)
     max_rows: int = 5
     max_data_columns: int = 10
     max_value_length: int = 128
     max_data_bytes: int = 10_000
     reveal_sensitive_values: bool = False
-    inference_mode: str = "adaptive"
+    inference_mode: str = "turbo"
     parallel_characters: bool = True
     adaptive_confirmation: bool = True
     adaptive_concurrency: bool = True
@@ -95,8 +95,6 @@ class ScanSettings:
             raise ValueError("max_value_length must be between 1 and 512")
         if not 1 <= self.max_data_bytes <= 50_000:
             raise ValueError("max_data_bytes must be between 1 and 50000")
-        if self.include_data and not self.data_tables:
-            raise ValueError("data_tables is required when include_data is enabled")
         if not 1 <= self.request_event_sample <= 1000:
             raise ValueError("request_event_sample must be between 1 and 1000")
         for selector in self.data_tables:
