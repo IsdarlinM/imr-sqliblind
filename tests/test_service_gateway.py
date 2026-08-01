@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -38,11 +39,15 @@ def build_client(tmp_path: Path) -> tuple[TestClient, UserStore, list[bool]]:
     return TestClient(app), store, stopped
 
 
+def login_token(page) -> str:
+    match = re.search(r'name="csrf" value="([^"]+)"', page.text)
+    assert match is not None
+    return match.group(1)
+
+
 def login(client: TestClient, username: str, password: str):
     page = client.get("/login")
-    csrf = page.cookies.get("sqliblind_login_csrf") or client.cookies.get(
-        "sqliblind_login_csrf"
-    )
+    csrf = login_token(page)
     return client.post(
         "/login",
         data={
@@ -78,6 +83,53 @@ def test_login_and_forced_bootstrap_password_change(tmp_path: Path) -> None:
     )
     assert changed.status_code == 303
     assert changed.headers["location"] == "/login"
+
+
+def test_login_does_not_depend_on_browser_cookie_persistence(tmp_path: Path) -> None:
+    client, _, _ = build_client(tmp_path)
+    page = client.get("/login")
+    csrf = login_token(page)
+
+    assert client.cookies.get("sqliblind_login_csrf") is None
+    client.cookies.clear()
+
+    response = client.post(
+        "/login",
+        data={
+            "username": "admin",
+            "password": "admin",
+            "csrf": csrf,
+            "next": "/",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/account/password"
+
+
+def test_login_request_token_is_one_time(tmp_path: Path) -> None:
+    client, _, _ = build_client(tmp_path)
+    csrf = login_token(client.get("/login"))
+    payload = {
+        "username": "admin",
+        "password": "incorrect",
+        "csrf": csrf,
+        "next": "/",
+    }
+
+    assert client.post("/login", data=payload).status_code == 401
+    replay = client.post("/login", data=payload)
+    assert replay.status_code == 403
+    assert "invalid or expired" in replay.text
+
+
+def test_missing_login_request_token_is_rejected(tmp_path: Path) -> None:
+    client, _, _ = build_client(tmp_path)
+    response = client.post(
+        "/login",
+        data={"username": "admin", "password": "admin", "next": "/"},
+    )
+    assert response.status_code == 403
 
 
 def test_roles_and_user_api_csrf(tmp_path: Path) -> None:
