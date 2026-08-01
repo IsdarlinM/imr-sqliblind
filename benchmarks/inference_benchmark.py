@@ -38,47 +38,73 @@ class Dialect:
     def boolean_payload(self, condition: str) -> str:
         return condition
 
+    def text_expression(self, expression: str) -> str:
+        return f"TEXT[{expression}]"
+
     def length_expression(self, expression: str) -> str:
         return f"LEN[{expression}]"
 
     def char_code_expression(self, expression: str, position: int) -> str:
-        return f"CODE[{expression}|{position}]"
+        return f"CODE[{position}][{expression}]"
+
+
+def numeric_value(token: str, value: str) -> int:
+    length = re.fullmatch(r"LEN\[(.*)]", token)
+    if length:
+        return len(length.group(1))
+    code = re.fullmatch(r"CODE\[(\d+)]\[(.*)]", token)
+    if code:
+        position = int(code.group(1))
+        source = code.group(2)
+        return ord(source[position - 1]) if position <= len(source) else 0
+    raise RuntimeError(token)
 
 
 def evaluate(condition: str, value: str) -> bool:
-    length = re.fullmatch(r"COALESCE\(\(LEN\[(.*)]\), 0\) > (\d+)", condition)
-    if length:
-        return len(length.group(1)) > int(length.group(2))
+    text = re.fullmatch(r"\(TEXT\[(.*)]\) = '(.*)'", condition)
+    if text:
+        expected = text.group(2).replace("''", "'")
+        return text.group(1) == expected
 
-    found = re.search(r"CODE\[(.*)\|(\d+)]", condition)
-    if not found:
-        raise RuntimeError(condition)
-    source, position = found.group(1), int(found.group(2))
-    code = ord(source[position - 1])
+    wrapped = re.search(r"COALESCE\(\((.*?)\), 0\)", condition)
+    if wrapped:
+        number = numeric_value(wrapped.group(1), value)
+    else:
+        code = re.search(r"CODE\[(\d+)]\[(.*?)]", condition)
+        if not code:
+            raise RuntimeError(condition)
+        number = numeric_value(
+            f"CODE[{code.group(1)}][{code.group(2)}]",
+            value,
+        )
 
     if " IN (" in condition:
         match = re.search(r" IN \(([^)]*)\)", condition)
         if match is None:
             raise RuntimeError(condition)
         values = {int(item) for item in match.group(1).split(",")}
-        return code in values
+        return number in values
 
     between = re.search(r" BETWEEN (\d+) AND (\d+)", condition)
     if between:
-        return int(between.group(1)) <= code <= int(between.group(2))
+        return int(between.group(1)) <= number <= int(between.group(2))
 
     bit = re.search(r"& (\d+)\) <> 0", condition)
     if bit:
-        return bool(code & int(bit.group(1)))
+        return bool(number & int(bit.group(1)))
 
-    compare = re.search(r"\)\s*([>=<]+)\s*(\d+)$", condition)
+    residue = re.search(r"% 3\) = (\d+)", condition)
+    if residue:
+        return number % 3 == int(residue.group(1))
+
+    compare = re.search(r"\)?\s*([>=<]+)\s*(\d+)$", condition)
     if compare is None:
         raise RuntimeError(condition)
     operator, expected = compare.group(1), int(compare.group(2))
     return {
-        ">": code > expected,
-        "=": code == expected,
-        "<": code < expected,
+        ">": number > expected,
+        "=": number == expected,
+        "<": number < expected,
     }[operator]
 
 
@@ -128,24 +154,33 @@ def run(
         "requests": client.requests_used,
         "elapsed_seconds": round(elapsed, 4),
         "requests_per_character": round(client.requests_used / len(value), 2),
+        "performance": extractor.performance_snapshot()["inference"],
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Compare optimized inference modes with a deterministic oracle."
+        description="Compare exact inference modes with a deterministic oracle."
     )
-    parser.add_argument("--value", default="User_Profile_50%_2026")
-    parser.add_argument("--latency", type=float, default=0.005)
-    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--value", default="A_9%")
+    parser.add_argument("--latency", type=float, default=0.01)
+    parser.add_argument("--workers", type=int, default=64)
+    parser.add_argument(
+        "--require-speedup",
+        type=float,
+        default=0.75,
+        help="Fail when turbo is not this much faster than adaptive",
+    )
     args = parser.parse_args()
 
     if not args.value:
         parser.error("--value cannot be empty")
     if args.latency < 0:
         parser.error("--latency cannot be negative")
-    if args.workers < 1:
-        parser.error("--workers must be positive")
+    if not 1 <= args.workers <= 64:
+        parser.error("--workers must be between 1 and 64")
+    if not 0 <= args.require_speedup < 1:
+        parser.error("--require-speedup must be between 0 and 1")
 
     legacy_requests = 9 + 11 * len(args.value)
     results: list[dict[str, object]] = [
@@ -160,22 +195,26 @@ def main() -> int:
             ),
         }
     ]
-    for mode in ("binary", "adaptive", "bitwise"):
-        for workers in (1, args.workers):
-            results.append(run(args.value, mode, workers, args.latency))
+    measured: dict[str, dict[str, object]] = {}
+    for mode in ("binary", "adaptive", "bitwise", "turbo"):
+        result = run(args.value, mode, args.workers, args.latency)
+        measured[mode] = result
+        results.append(result)
 
-    print(
-        json.dumps(
-            {
-                "value": args.value,
-                "length": len(args.value),
-                "probe_latency": args.latency,
-                "results": results,
-            },
-            indent=2,
-        )
-    )
-    return 0
+    adaptive_elapsed = float(measured["adaptive"]["elapsed_seconds"])
+    turbo_elapsed = float(measured["turbo"]["elapsed_seconds"])
+    speedup = 1 - turbo_elapsed / adaptive_elapsed
+    document = {
+        "value": args.value,
+        "length": len(args.value),
+        "probe_latency": args.latency,
+        "workers": args.workers,
+        "turbo_speedup_vs_adaptive": round(speedup, 4),
+        "required_speedup": args.require_speedup,
+        "results": results,
+    }
+    print(json.dumps(document, indent=2))
+    return 0 if speedup >= args.require_speedup else 1
 
 
 if __name__ == "__main__":
