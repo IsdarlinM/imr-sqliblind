@@ -2,7 +2,7 @@
 
 ```text
 imr-sqliblind
-imr :: v0.8.0
+imr :: v0.8.2
 ```
 
 `imr-sqliblind` is a bounded blind SQL injection research helper for authorized laboratories, CTFs, and explicitly permitted security assessments.
@@ -20,13 +20,14 @@ The installed command is `sqliblind`. It provides a CLI, a realtime web console,
 
 - MySQL and SQLite blind extraction dialects.
 - Status, marker, regex, and response-length oracles.
-- Sentinel binary search for bounded counts and lengths without a separate overflow probe.
+- Turbo bounded-integer and length inference using globally scheduled bit planes.
+- Modulo-3 error detection plus exact whole-identifier confirmation and robust fallback.
 - Adaptive character inference using weighted numeric partitions with exact fallback.
-- Optional globally scheduled bitwise inference and compatibility binary mode.
+- Compatibility bitwise and binary inference modes.
 - Character-position scheduling across all workers, including a single entity.
 - Adaptive equality confirmation with noise-aware two-of-three fallback only when required.
-- AIMD concurrency control, shared request budget, and global delay.
-- Pipelined schema → table → column discovery.
+- AIMD concurrency control, shared request budget, and configurable global delay.
+- Smallest-schema-first schema → tables → columns → bounded rows discovery.
 - Batched SQLite event persistence with sampled raw request events.
 - Schemas, tables, columns, bounded rows, and cells.
 - CLI activity monitor without misleading percentages.
@@ -344,7 +345,7 @@ Use another authorized target:
 sqliblind \
   --url "https://lab.example/fetch" \
   --parameter id \
-  --workers 8 \
+  --workers 16 \
   map
 ```
 
@@ -353,7 +354,7 @@ sqliblind \
 The CLI shows current work instead of a fabricated percentage. Concurrent workers appear as independent tasks with operation, target, extraction detail, request count, and elapsed time.
 
 ```bash
-sqliblind --workers 8 map
+sqliblind --workers 16 map
 sqliblind --progress live map
 sqliblind --progress plain map
 sqliblind --progress off map
@@ -367,50 +368,65 @@ sqliblind --json map
 
 ## Optimized exact inference
 
-The default `adaptive` mode partitions the configured numeric character-code range using identifier-oriented probabilities learned during the current scan. It does not use wordlists and it never removes uppercase, lowercase, digits, punctuation, `%`, or `_` from the configured range.
+The default `turbo` mode uses globally scheduled bit planes for bounded integers, lengths, and character codes. Independent boolean decisions are executed breadth-first across the worker pool instead of waiting for the previous decision before choosing the next.
 
 Character conditions use numeric comparisons only:
 
 ```sql
-(code_expression) > 80
+((code_expression) & 1) <> 0
+((code_expression) & 2) <> 0
+((code_expression) % 3) = 0
 (code_expression) = 95
-(code_expression) IN (37,48,65,95,97)
 ```
 
 `%` is inferred as code `37` and `_` as code `95`. They are never inserted into a `LIKE` pattern, so neither character can act as a wildcard during character discovery. The SQLite catalog query `name NOT LIKE 'sqlite_%'` remains limited to excluding internal SQLite tables and is unrelated to character inference.
 
+Turbo reconstructs the candidate from independent bits, checks its modulo-3 residue, and confirms the complete identifier with one equality probe. A checksum or confirmation mismatch falls back to the existing exact per-character path only for the affected value.
+
 Available modes:
 
 ```bash
+sqliblind --inference-mode turbo --workers 16 map
 sqliblind --inference-mode adaptive --workers 8 map
 sqliblind --inference-mode bitwise --workers 8 map
 sqliblind --inference-mode binary --workers 8 map
 ```
 
+- `turbo`: breadth-first bit planes, modulo-3 error detection, aggregate identifier confirmation, and exact fallback.
 - `adaptive`: weighted numeric partitions, online character-frequency learning, one normal equality confirmation, and robust majority fallback only after inconsistency.
-- `bitwise`: globally schedules independent code bits across workers, then confirms the reconstructed code.
+- `bitwise`: globally schedules independent code bits across workers, then confirms each reconstructed code.
 - `binary`: compatibility mode using a fast numeric binary search and adaptive fallback.
 
 Use `--serial-characters` only for diagnostics. By default, positions from one or many entities share the same worker pool. `--fixed-concurrency` disables AIMD backoff when a strictly fixed request concurrency is required. Adaptive concurrency begins at the configured worker ceiling, halves on HTTP 429 or transport failures, and recovers additively after stable responses.
+
+Complete algorithm and workflow details: [docs/turbo-discovery.md](docs/turbo-discovery.md).
 
 ### Reproducible simulated benchmark
 
 Run:
 
 ```bash
-python benchmarks/inference_benchmark.py --latency 0.003 --workers 8
+python benchmarks/inference_benchmark.py \
+  --value 'A_9%' \
+  --latency 0.01 \
+  --workers 64 \
+  --require-speedup 0.75
 ```
 
-For `User_Profile_50%_2026` with a simulated 3 ms oracle, the development benchmark produced:
+The simulator exits non-zero when turbo does not achieve at least a 75% latency reduction versus adaptive mode under this controlled clean-oracle configuration. This threshold measures dependency depth with enough workers to execute one character bit plane concurrently.
 
-| Mode | Workers | Requests | Elapsed |
-|---|---:|---:|---:|
-| Legacy estimate | 1 | 240 | 0.7200 s |
-| Binary optimized | 8 | 172 | ~0.11 s |
-| Adaptive | 8 | 154 | ~0.10 s |
-| Bitwise | 8 | 175 | ~0.10 s |
+It is a deterministic laboratory target, not a promise for every remote system. Real performance depends on target latency, configured delay, rate limits, oracle noise, transport failures, identifier lengths, worker count, and server capacity.
 
-These are deterministic laboratory measurements from the included simulator, not a promise for remote targets. Real performance depends on target latency, configured delay, rate limits, oracle noise, and server capacity.
+## Smallest-schema-first map flow
+
+After schema discovery, the mapper infers all table counts concurrently and orders schemas by `(table count, case-insensitive name)`. For each schema it then:
+
+1. Discovers every table name.
+2. Discovers columns for every table.
+3. Extracts bounded rows for every table, or for optional `schema.table` filters.
+4. Completes the schema before starting the next one.
+
+The table count is used as the size metric because it is bounded metadata available before table names and content are extracted.
 
 ## Realtime web console
 
@@ -496,7 +512,7 @@ The browser also displays current activities, schemas, tables, columns, rows, ce
 
 ## Bounded row extraction
 
-Row extraction is disabled by default and must target an explicit table:
+The dedicated `rows` command always targets one explicit table:
 
 ```bash
 sqliblind rows \
@@ -508,28 +524,35 @@ sqliblind rows \
   --max-data-bytes 10000
 ```
 
-Include bounded data in a map only for explicitly selected tables:
+`map` extracts bounded rows from all discovered tables by default. Use an optional filter to limit it:
 
 ```bash
 sqliblind map \
-  --include-data \
   --data-table level5.photos \
   --max-rows 5 \
   --format html \
   --output reports/full-map.html
 ```
 
+Disable row values and retain schemas, tables, and columns:
+
+```bash
+sqliblind map --metadata-only
+```
+
+All map data shares the global byte budget. Sensitive-looking values remain masked unless `--show-sensitive-values` is explicitly supplied.
+
 ## Concurrency and safety
 
 ```bash
-sqliblind --workers 64 --delay 0.1 --max-requests 5000 map
+sqliblind --workers 16 --delay 0 --max-requests 5000 map
 ```
 
-- Workers: 1–64 in the CLI.
+- Workers: 1–64 in the CLI and 1–16 in the web console.
 - One thread-local HTTP session per worker.
 - Shared global delay and request budget.
 - Deterministic output ordering.
-- Adaptive single confirmation with majority fallback only after inconsistency.
+- Turbo checksum and aggregate confirmation with exact fallback.
 - Character positions are scheduled globally instead of serially per entity.
 - HTTP concurrency starts at the configured ceiling and backs off only after HTTP 429 or network failures.
 - Web events are committed in short transactions; raw request events are sampled while exact counters are retained.
@@ -537,6 +560,8 @@ sqliblind --workers 64 --delay 0.1 --max-requests 5000 map
 - Pending futures cancelled after failures.
 - TLS validation enabled unless `--insecure` is explicitly supplied.
 - Redirects are not followed.
+
+Set a positive `--delay` or reduce `--workers` when the authorized environment requires a lower request rate.
 
 ## Oracle modes
 
@@ -551,7 +576,7 @@ sqliblind --oracle length --true-length 3246 --length-tolerance 3 schemas
 
 ```bash
 sqliblind \
-  --header "User-Agent:imr-sqliblind/0.8.0" \
+  --header "User-Agent:imr-sqliblind/0.8.2" \
   --cookie "session=test-value" \
   --proxy "http://127.0.0.1:8080" \
   schemas
@@ -583,7 +608,11 @@ python -m compileall -q src sqliblind.py tests benchmarks
 bash -n install.sh uninstall.sh
 node --check src/blind_sqli/webui/app.js
 node --check src/blind_sqli/webui/inference-options.js
-python benchmarks/inference_benchmark.py --latency 0.003 --workers 8
+python benchmarks/inference_benchmark.py \
+  --value 'A_9%' \
+  --latency 0.01 \
+  --workers 64 \
+  --require-speedup 0.75
 ruff check .
 bandit -q -r src
 ```
