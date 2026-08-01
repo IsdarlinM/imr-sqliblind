@@ -16,6 +16,10 @@ from typing import Any
 from .auth import UserStore
 from .service_config import atomic_write_json, load_config
 
+_WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_WINDOWS_ERROR_ACCESS_DENIED = 5
+_WINDOWS_MAX_PID = 0xFFFFFFFF
+
 
 def add_inner_csrf_cookie_middleware(
     app: Any,
@@ -41,16 +45,61 @@ def add_inner_csrf_cookie_middleware(
     return app
 
 
+def _windows_pid_running(pid: int) -> bool:
+    """Check a Windows PID without using os.kill(pid, 0).
+
+    CPython maps os.kill() to the Windows process termination API. Signal zero is
+    therefore not a portable existence probe and may raise WinError 87 followed by
+    SystemError. OpenProcess is the supported non-destructive check.
+    """
+    if pid <= 0 or pid > _WINDOWS_MAX_PID:
+        return False
+
+    import ctypes
+
+    win_dll = getattr(ctypes, "WinDLL", None)
+    get_last_error = getattr(ctypes, "get_last_error", None)
+    if win_dll is None or get_last_error is None:  # pragma: no cover - defensive
+        return False
+
+    try:
+        kernel32 = win_dll("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
+        open_process.restype = ctypes.c_void_p
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [ctypes.c_void_p]
+        close_handle.restype = ctypes.c_int
+        handle = open_process(
+            _WINDOWS_PROCESS_QUERY_LIMITED_INFORMATION,
+            0,
+            pid,
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return False
+
+    if handle:
+        try:
+            return True
+        finally:
+            close_handle(handle)
+
+    # Protected/system processes can deny query access while still existing.
+    return int(get_last_error()) == _WINDOWS_ERROR_ACCESS_DENIED
+
+
 def _pid_running(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_pid_running(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    except OSError:
+    except (OSError, OverflowError, ValueError):
         return False
     return True
 
@@ -59,7 +108,7 @@ def _read_state(path: str | Path) -> dict[str, Any] | None:
     state_path = Path(path)
     try:
         value = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     if not isinstance(value, dict):
         return None
@@ -85,10 +134,11 @@ def _control_request(
     method: str = "GET",
     timeout: float = 2.0,
 ) -> dict[str, Any] | None:
-    url = str(state.get("control_url", "")).rstrip("/") + path
-    token = str(state.get("control_token", ""))
-    if not url or not token:
+    base_url = str(state.get("control_url", "")).strip().rstrip("/")
+    token = str(state.get("control_token", "")).strip()
+    if not base_url or not token:
         return None
+    url = base_url + path
     request = urllib.request.Request(
         url,
         method=method,
@@ -98,7 +148,7 @@ def _control_request(
     try:
         with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
             payload = response.read(64_000)
-    except (OSError, urllib.error.URLError, urllib.error.HTTPError):
+    except (OSError, ValueError, urllib.error.URLError, urllib.error.HTTPError):
         return None
     try:
         value = json.loads(payload.decode("utf-8"))
@@ -116,13 +166,9 @@ def service_status(config_path: str | Path | None = None) -> dict[str, Any]:
         pid = int(state.get("pid", 0))
     except (TypeError, ValueError):
         pid = 0
-    if not _pid_running(pid):
-        _remove_state(config.state_file)
-        return {
-            "status": "stopped",
-            "config": str(path),
-            "stale_state_removed": True,
-        }
+
+    # The authenticated control endpoint is authoritative and avoids relying on a
+    # platform-specific PID probe for a healthy service.
     response = _control_request(state, "/api/service/status")
     if response and response.get("status") == "running":
         return {
@@ -135,6 +181,13 @@ def service_status(config_path: str | Path | None = None) -> dict[str, Any]:
             "config": str(path),
             "log_file": state.get("log_file", config.log_file),
             "auth_database": state.get("auth_database", config.auth_database),
+        }
+    if not _pid_running(pid):
+        _remove_state(config.state_file)
+        return {
+            "status": "stopped",
+            "config": str(path),
+            "stale_state_removed": True,
         }
     return {
         "status": "unresponsive",
@@ -232,15 +285,16 @@ def stop_service(
         pid = int(state.get("pid", 0))
     except (TypeError, ValueError):
         pid = 0
-    if not _pid_running(pid):
-        _remove_state(config.state_file)
-        return {
-            "status": "stopped",
-            "stale_state_removed": True,
-            "config": str(path),
-        }
+
     response = _control_request(state, "/api/service/shutdown", method="POST")
     if not response or response.get("status") != "stopping":
+        if not _pid_running(pid):
+            _remove_state(config.state_file)
+            return {
+                "status": "stopped",
+                "stale_state_removed": True,
+                "config": str(path),
+            }
         raise RuntimeError(
             "service refused the authenticated shutdown request; inspect the service log"
         )
