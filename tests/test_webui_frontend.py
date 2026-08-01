@@ -128,8 +128,9 @@ class WebUiFrontendTests(unittest.TestCase):
         self.assertIn("ui_updated_at", self.javascript)
         self.assertIn("No active searches.", self.javascript)
 
-    def test_special_characters_are_documented_as_numeric_codes(self) -> None:
-        self.assertIn("Percent (37) and underscore (95)", self.html)
+    def test_turbo_and_numeric_character_inference_are_documented(self) -> None:
+        self.assertIn("turbo · bit planes + modulo checksum", self.html)
+        self.assertIn("numeric codes only", self.html)
         self.assertIn(
             'inference_mode: String(data.get("inference_mode")',
             self.javascript,
