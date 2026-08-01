@@ -1,797 +1,527 @@
 "use strict";
 
 const professionalUiState = {
-  treeExpanded: new Set(),
-  tableExpanded: new Set(),
+  treeOpen: new Set(),
+  tableOpen: new Set(),
+  virtual: Object.create(null),
   density: localStorage.getItem("sqliblind.ui.density") || "compact",
-  elastic: null,
-  elasticFrame: null,
-  cleanupTimer: null,
-  initialized: false,
+  workspaceLoadedFor: null,
+  lastPersistAt: 0,
+  compare: { left: null, right: null },
+  resizersBound: false,
 };
 
-const ELASTIC_GRAPH = Object.freeze({
-  maxDepth: 4,
-  maxNodes: 120,
-  weights: Object.freeze([1, 0.58, 0.34, 0.2, 0.12]),
-  settleMilliseconds: 1100,
+const PROFESSIONAL_UI = Object.freeze({
+  virtualItemHeight: 34,
+  virtualOverscan: 8,
+  elasticWeights: Object.freeze([1, 0.58, 0.34, 0.2, 0.12]),
+  elasticMaxNodes: 120,
+  persistInterval: 300,
 });
 
 function professionalElement(name, className = "", text = null) {
-  const element = document.createElement(name);
-  if (className) {
-    element.className = className;
-  }
-  if (text !== null) {
-    element.textContent = String(text);
-  }
-  return element;
+  const node = document.createElement(name);
+  if (className) node.className = className;
+  if (text !== null) node.textContent = String(text);
+  return node;
 }
 
-function professionalChildrenMap() {
-  const result = new Map();
-  for (const entity of state.entities.values()) {
-    const parent = entity.parent_id || null;
-    if (!result.has(parent)) {
-      result.set(parent, []);
-    }
-    result.get(parent).push(entity);
-  }
-  for (const values of result.values()) {
-    values.sort(
-      (left, right) =>
-        String(left.type).localeCompare(String(right.type)) ||
-        String(left.name).localeCompare(String(right.name)),
+function professionalChildren(parentId) {
+  return [...state.entities.values()]
+    .filter((entity) => (entity.parent_id || null) === (parentId || null))
+    .sort((left, right) =>
+      String(left.type).localeCompare(String(right.type)) ||
+      String(left.name).localeCompare(String(right.name)),
     );
-  }
-  return result;
 }
 
-function professionalEntityPath(entity) {
-  const parts = [entity.name];
-  const seen = new Set([entity.id]);
-  let current = entity;
-  while (current?.parent_id && !seen.has(current.parent_id)) {
-    seen.add(current.parent_id);
-    current = state.entities.get(current.parent_id);
-    if (current) {
-      parts.unshift(current.name);
+function professionalDescendantCount(id) {
+  let total = 0;
+  const queue = [id];
+  const seen = new Set();
+  while (queue.length) {
+    const current = queue.shift();
+    if (seen.has(current)) continue;
+    seen.add(current);
+    for (const child of professionalChildren(current)) {
+      total += 1;
+      queue.push(child.id);
     }
   }
-  return parts.join(".");
+  return total;
 }
 
-function professionalBranchMatcher(childMap) {
-  const query = String(state.filter || "").trim().toLocaleLowerCase();
-  const cache = new Map();
-  const matches = (entity, visiting = new Set()) => {
-    if (!query) {
-      return true;
-    }
-    if (cache.has(entity.id)) {
-      return cache.get(entity.id);
-    }
-    if (visiting.has(entity.id)) {
-      return false;
-    }
-    visiting.add(entity.id);
-    const direct = `${entity.type} ${entity.name} ${professionalEntityPath(
-      entity,
-    )} ${JSON.stringify(entity.data || {})}`
-      .toLocaleLowerCase()
-      .includes(query);
-    const nested = (childMap.get(entity.id) || []).some((child) =>
-      matches(child, visiting),
-    );
-    visiting.delete(entity.id);
-    cache.set(entity.id, direct || nested);
-    return direct || nested;
-  };
-  return { query, matches };
+function professionalBranchMatches(entity) {
+  if (!state.filter) return true;
+  return branchMatches(entity);
 }
 
-function professionalTreeOpen(entity, query) {
-  if (query) {
-    return true;
-  }
-  if (professionalUiState.treeExpanded.has(entity.id)) {
-    return true;
-  }
-  return entity.type === "schema";
-}
+function renderProfessionalTreeNode(entity, depth = 0) {
+  const descendants = professionalChildren(entity.id).filter(professionalBranchMatches);
+  const branch = document.createElement("details");
+  branch.className = `professional-tree-branch type-${entity.type}`;
+  branch.dataset.entityId = entity.id;
+  branch.style.setProperty("--tree-depth", String(depth));
+  const forcedOpen = Boolean(state.filter && branchMatches(entity));
+  branch.open = forcedOpen || professionalUiState.treeOpen.has(entity.id) || depth === 0;
 
-function professionalTreeRow(entity, childCount, expandable = false) {
-  const row = professionalElement("div", "professional-tree-row");
-  const type = professionalElement(
+  const summary = document.createElement("summary");
+  summary.className = "professional-tree-summary";
+  const kind = professionalElement("span", "professional-tree-kind", entity.type);
+  const name = professionalElement("strong", "professional-tree-name", entity.name);
+  const count = professionalElement(
     "span",
-    `professional-kind professional-kind--${entity.type}`,
-    entity.type,
+    "professional-tree-count",
+    descendants.length ? `${descendants.length} direct · ${professionalDescendantCount(entity.id)} total` : entity.status || "",
   );
-  const name = professionalElement(
-    "span",
-    "professional-tree-name",
-    entity.name,
-  );
-  name.title = professionalEntityPath(entity);
-  const meta = professionalElement(
-    "span",
-    "professional-tree-meta",
-    expandable ? `${childCount}` : entity.status || "",
-  );
-  const details = professionalElement("button", "tree-details-button", "Details");
+  const details = professionalElement("button", "professional-icon-button", "Details");
   details.type = "button";
   details.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
     openDrawer(entity);
   });
-  row.append(type, name, meta, details);
-  return row;
-}
-
-function professionalTreeNode(entity, childMap, matcher) {
-  const descendants = (childMap.get(entity.id) || []).filter(matcher.matches);
-  if (!descendants.length) {
-    const leaf = professionalElement("div", "professional-tree-leaf");
-    leaf.append(professionalTreeRow(entity, 0, false));
-    return leaf;
-  }
-
-  const branch = document.createElement("details");
-  branch.className = "professional-tree-branch";
-  branch.dataset.entityId = entity.id;
-  branch.open = professionalTreeOpen(entity, matcher.query);
-
-  const summary = document.createElement("summary");
-  summary.append(professionalTreeRow(entity, descendants.length, true));
+  summary.append(kind, name, count, details);
   branch.append(summary);
 
-  if (branch.open) {
-    const childrenRoot = professionalElement("div", "professional-tree-children");
-    for (const child of descendants) {
-      childrenRoot.append(professionalTreeNode(child, childMap, matcher));
-    }
-    branch.append(childrenRoot);
-  }
-
+  const body = professionalElement("div", "professional-tree-body");
+  for (const child of descendants) body.append(renderProfessionalTreeNode(child, depth + 1));
+  branch.append(body);
   branch.addEventListener("toggle", () => {
-    if (branch.open) {
-      professionalUiState.treeExpanded.add(entity.id);
-    } else {
-      professionalUiState.treeExpanded.delete(entity.id);
-    }
-    if (!matcher.query) {
-      scheduleRender();
-    }
+    if (branch.open) professionalUiState.treeOpen.add(entity.id);
+    else professionalUiState.treeOpen.delete(entity.id);
+    persistProfessionalWorkspace();
   });
   return branch;
 }
 
-function setProfessionalTreeExpansion(mode) {
-  professionalUiState.treeExpanded.clear();
-  if (mode !== "none") {
-    for (const entity of state.entities.values()) {
-      if (mode === "all" || entity.type === "schema") {
-        professionalUiState.treeExpanded.add(entity.id);
+function professionalTreeToolbar() {
+  const bar = professionalElement("div", "professional-view-toolbar");
+  const actions = [
+    ["Schemas only", () => {
+      professionalUiState.treeOpen.clear();
+      renderTree();
+    }],
+    ["Expand visible", () => {
+      for (const entity of state.entities.values()) {
+        if (professionalBranchMatches(entity)) professionalUiState.treeOpen.add(entity.id);
       }
-    }
-  }
-  scheduleRender();
-}
-
-function professionalTreeToolbar(visibleRoots) {
-  const toolbar = professionalElement("div", "professional-tree-toolbar");
-  const summary = professionalElement(
-    "div",
-    "professional-view-summary",
-    `${visibleRoots.length} roots · ${state.entities.size} objects`,
-  );
-  const actions = professionalElement("div", "professional-view-actions");
-  for (const [label, mode] of [
-    ["Schemas", "schemas"],
-    ["Expand all", "all"],
-    ["Collapse", "none"],
-  ]) {
+      renderTree();
+    }],
+    ["Collapse all", () => {
+      professionalUiState.treeOpen.clear();
+      renderTree();
+    }],
+  ];
+  for (const [label, action] of actions) {
     const button = professionalElement("button", "", label);
     button.type = "button";
-    button.addEventListener("click", () => setProfessionalTreeExpansion(mode));
-    actions.append(button);
+    button.addEventListener("click", action);
+    bar.append(button);
   }
-  toolbar.append(summary, actions);
-  return toolbar;
+  return bar;
 }
 
+const renderTreeBeforeProfessional = renderTree;
 renderTree = function renderProfessionalTree() {
   const root = $("treePane");
-  const childMap = professionalChildrenMap();
-  const matcher = professionalBranchMatcher(childMap);
-  const roots = (childMap.get(null) || []).filter(matcher.matches);
-  const fragment = document.createDocumentFragment();
-  fragment.append(professionalTreeToolbar(roots));
-
+  if (!root) return;
+  const roots = professionalChildren(null).filter(professionalBranchMatches);
   if (!roots.length) {
-    fragment.append(
-      professionalElement("div", "empty", "No matching database objects."),
-    );
-    root.replaceChildren(fragment);
+    root.replaceChildren(professionalElement("div", "empty", "No matching entities."));
     return;
   }
-
-  const forest = professionalElement("div", "professional-tree-forest");
-  for (const entity of roots) {
-    forest.append(professionalTreeNode(entity, childMap, matcher));
-  }
-  fragment.append(forest);
-  root.replaceChildren(fragment);
+  const content = professionalElement("div", "professional-tree");
+  for (const entity of roots) content.append(renderProfessionalTreeNode(entity));
+  root.replaceChildren(professionalTreeToolbar(), content);
 };
 
-function professionalTableBody(schema, table, rows, columns) {
-  const body = professionalElement("div", "entity-table-details");
-  const columnsSection = professionalElement("section", "entity-table-section");
-  const columnsHead = professionalElement("div", "entity-table-section-head");
-  columnsHead.append(
-    professionalElement("h4", "", "Columns"),
-    professionalElement("span", "muted", `${columns.length}`),
+function professionalTableSummary(schema, table, columns, rows) {
+  const head = professionalElement("summary", "professional-table-summary");
+  const identity = professionalElement("span", "professional-table-identity");
+  identity.append(
+    professionalElement("span", "professional-table-kind", "TABLE"),
+    professionalElement("strong", "", `${schema.name}.${table.name}`),
   );
-  const chips = professionalElement("div", "entity-column-chips");
-  if (columns.length) {
-    columns.forEach((column, index) => {
-      const chip = professionalElement(
-        "button",
-        "entity-column-chip",
-        `${index + 1} · ${column}`,
-      );
-      chip.type = "button";
-      chip.title = `${schema.name}.${table.name}.${column}`;
-      chip.addEventListener("click", (event) => event.stopPropagation());
-      chips.append(chip);
-    });
-  } else {
-    chips.append(professionalElement("span", "muted", "No columns discovered."));
-  }
-  columnsSection.append(columnsHead, chips);
-
-  const dataSection = professionalElement("section", "entity-table-section");
-  const dataHead = professionalElement("div", "entity-table-section-head");
-  dataHead.append(
-    professionalElement("h4", "", "Rows"),
-    professionalElement("span", "muted", `${rows.length}`),
+  head.append(
+    identity,
+    professionalElement("span", "professional-table-meta", `${columns.length} columns · ${rows.length} rows · ${table.status || "unknown"}`),
   );
-  dataSection.append(dataHead);
-  if (!rows.length) {
-    dataSection.append(
-      professionalElement(
-        "p",
-        "entity-table-empty",
-        "Rows were not extracted for this table.",
-      ),
-    );
-  } else {
-    const values = rows.map((row, index) => {
-      const rowValues = tableViewRowValues(row);
-      return [index + 1, ...columns.map((column) => rowValues[column] ?? "")];
-    });
-    dataSection.append(
-      tableViewTable(
-        ["Row", ...columns],
-        values,
-        "entity-table entity-table-data",
-      ),
-    );
-  }
-
-  body.append(columnsSection, dataSection);
-  return body;
+  return head;
 }
 
-buildTableEntityCard = function buildProfessionalTableCard(schema, table) {
+function professionalColumnChips(columns) {
+  const chips = professionalElement("div", "professional-column-chips");
+  columns.forEach((column, index) => {
+    const chip = professionalElement("button", "professional-column-chip", column);
+    chip.type = "button";
+    chip.title = `Column ${index + 1}: ${column}`;
+    chips.append(chip);
+  });
+  return chips;
+}
+
+function buildProfessionalTableCard(schema, table) {
   const rows = tableViewChildren(table.id, "row");
   const columns = tableViewColumns(table, rows);
   const card = document.createElement("details");
-  card.className = "entity-table-card professional-table-card";
+  card.className = "professional-table-card";
+  card.dataset.entityId = table.id;
   card.dataset.search = tableViewSearchText(schema, table, columns, rows);
-  card.dataset.tableId = table.id;
-  card.open = professionalUiState.tableExpanded.has(table.id);
+  card.open = professionalUiState.tableOpen.has(table.id);
+  card.append(professionalTableSummary(schema, table, columns, rows));
+  const body = professionalElement("div", "professional-table-body");
+  body.dataset.loaded = "false";
+  card.append(body);
 
-  const summary = document.createElement("summary");
-  summary.className = "professional-table-summary";
-  const identity = professionalElement("div", "professional-table-identity");
-  identity.append(
-    professionalElement("span", "entity-table-kind", "TABLE"),
-    professionalElement("strong", "", `${schema.name}.${table.name}`),
-  );
-  const counts = professionalElement("div", "professional-table-counts");
-  counts.append(
-    professionalElement("span", "", `${columns.length} columns`),
-    professionalElement("span", "", `${rows.length} rows`),
-    professionalElement("span", "", table.status || "unknown"),
-  );
-  const details = professionalElement("button", "tree-details-button", "Details");
-  details.type = "button";
-  details.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    openDrawer(table);
-  });
-  summary.append(identity, counts, details);
-  card.append(summary);
-
-  const ensureBody = () => {
-    if (card.dataset.loaded === "true") {
-      return;
-    }
+  const load = () => {
+    if (body.dataset.loaded === "true") return;
+    const dataRows = rows.map((row, index) => {
+      const values = tableViewRowValues(row);
+      return [index + 1, ...columns.map((column) => values[column] ?? "")];
+    });
+    body.replaceChildren(
+      professionalColumnChips(columns),
+      rows.length
+        ? tableViewTable(["Row", ...columns], dataRows, "entity-table entity-table-data")
+        : professionalElement("p", "entity-table-empty", "Rows were not extracted for this table."),
+    );
+    body.dataset.loaded = "true";
     card.dataset.loaded = "true";
-    card.append(professionalTableBody(schema, table, rows, columns));
   };
-  if (card.open) {
-    ensureBody();
-  }
+  if (card.open) load();
   card.addEventListener("toggle", () => {
     if (card.open) {
-      professionalUiState.tableExpanded.add(table.id);
-      ensureBody();
-    } else {
-      professionalUiState.tableExpanded.delete(table.id);
-    }
+      professionalUiState.tableOpen.add(table.id);
+      load();
+    } else professionalUiState.tableOpen.delete(table.id);
+    persistProfessionalWorkspace();
   });
+  card.addEventListener("dblclick", () => openDrawer(table));
   return card;
+}
+
+const renderTableViewBeforeProfessional = renderTableView;
+renderTableView = function renderProfessionalTableView(force = false) {
+  if (!force && state.activePane !== "tables") return;
+  const root = $("tableEntityGrid");
+  const summary = $("tableViewSummary");
+  if (!root || !summary) return;
+  const schemas = [...state.entities.values()]
+    .filter((entity) => entity.type === "schema")
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const cards = [];
+  for (const schema of schemas) {
+    for (const table of tableViewChildren(schema.id, "table")) cards.push(buildProfessionalTableCard(schema, table));
+  }
+  const query = String(state.filter || "").trim().toLowerCase();
+  const visible = cards.filter((card) => !query || card.dataset.search.includes(query));
+  summary.textContent = `${visible.length}/${cards.length} tables · ${schemas.length} schemas`;
+  const toolbar = professionalElement("div", "professional-view-toolbar");
+  for (const [label, open] of [["Expand visible", true], ["Collapse all", false]]) {
+    const button = professionalElement("button", "", label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      visible.forEach((card) => {
+        card.open = open;
+        card.dispatchEvent(new Event("toggle"));
+      });
+    });
+    toolbar.append(button);
+  }
+  root.replaceChildren(toolbar, ...visible);
 };
-
-function setVisibleTablesExpanded(expanded) {
-  const cards = [...document.querySelectorAll(".professional-table-card")];
-  for (const card of cards) {
-    card.open = expanded;
-    const id = card.dataset.tableId;
-    if (expanded && id) {
-      professionalUiState.tableExpanded.add(id);
-    } else if (id) {
-      professionalUiState.tableExpanded.delete(id);
-    }
-  }
-}
-
-function ensureProfessionalTableToolbar() {
-  const pane = $("tablesPane");
-  const head = pane?.querySelector(":scope > .section-head");
-  if (!pane || !head || $("professionalTableActions")) {
-    return;
-  }
-  const actions = professionalElement("div", "professional-view-actions");
-  actions.id = "professionalTableActions";
-  const expand = professionalElement("button", "", "Expand visible");
-  expand.type = "button";
-  expand.addEventListener("click", () => setVisibleTablesExpanded(true));
-  const collapse = professionalElement("button", "", "Collapse all");
-  collapse.type = "button";
-  collapse.addEventListener("click", () => setVisibleTablesExpanded(false));
-  actions.append(expand, collapse);
-  head.append(actions);
-}
-
-const renderTableViewBeforeProfessionalUi = renderTableView;
-renderTableView = function renderProfessionalTables(force = false) {
-  renderTableViewBeforeProfessionalUi(force);
-  ensureProfessionalTableToolbar();
-};
-
-function professionalGraphAdjacency() {
-  const adjacency = new Map();
-  const connect = (left, right) => {
-    if (!left || !right || left === right) {
-      return;
-    }
-    if (!adjacency.has(left)) {
-      adjacency.set(left, new Set());
-    }
-    if (!adjacency.has(right)) {
-      adjacency.set(right, new Set());
-    }
-    adjacency.get(left).add(right);
-    adjacency.get(right).add(left);
-  };
-  for (const relation of state.relationships.values()) {
-    connect(relation.source_id, relation.target_id);
-  }
-  for (const entity of state.entities.values()) {
-    if (entity.parent_id) {
-      connect(entity.id, entity.parent_id);
-    }
-  }
-  return adjacency;
-}
 
 function professionalElasticCluster(rootId) {
-  const adjacency = professionalGraphAdjacency();
-  const weights = new Map([[rootId, 1]]);
-  const depth = new Map([[rootId, 0]]);
-  const queue = [rootId];
-  while (queue.length && weights.size < ELASTIC_GRAPH.maxNodes) {
-    const current = queue.shift();
-    const currentDepth = depth.get(current) || 0;
-    if (currentDepth >= ELASTIC_GRAPH.maxDepth) {
-      continue;
-    }
-    for (const neighbor of adjacency.get(current) || []) {
-      if (weights.has(neighbor) || !graphState.positions.has(neighbor)) {
-        continue;
-      }
-      const nextDepth = currentDepth + 1;
-      depth.set(neighbor, nextDepth);
-      weights.set(
-        neighbor,
-        ELASTIC_GRAPH.weights[nextDepth] ||
-          ELASTIC_GRAPH.weights[ELASTIC_GRAPH.weights.length - 1],
-      );
-      queue.push(neighbor);
-      if (weights.size >= ELASTIC_GRAPH.maxNodes) {
-        break;
-      }
+  const weights = PROFESSIONAL_UI.elasticWeights;
+  const result = new Map([[rootId, 1]]);
+  const queue = [{ id: rootId, depth: 0 }];
+  while (queue.length && result.size < PROFESSIONAL_UI.elasticMaxNodes) {
+    const { id, depth } = queue.shift();
+    if (depth >= weights.length - 1) continue;
+    const context = directGraphContext(id);
+    for (const relatedId of context.relatedIds) {
+      if (result.has(relatedId)) continue;
+      const nextDepth = depth + 1;
+      result.set(relatedId, weights[nextDepth]);
+      queue.push({ id: relatedId, depth: nextDepth });
+      if (result.size >= PROFESSIONAL_UI.elasticMaxNodes) break;
     }
   }
-  return weights;
+  return result;
 }
 
-function professionalGraphCenter(id) {
-  const position = graphState.positions.get(id);
-  const dimensions = graphState.dimensions.get(id);
-  if (!position || !dimensions) {
-    return null;
-  }
-  return {
-    x: position.x + (dimensions.centerX ?? dimensions.width / 2),
-    y: position.y + (dimensions.centerY ?? dimensions.height / 2),
-  };
-}
+const graphPointerMoveBase = setupGraphInteraction;
+// Elastic propagation is installed through a capturing listener so the original
+// single-node drag remains the source of truth for pointer ownership.
+const graphSurface = $("graph");
+if (graphSurface) {
+  graphSurface.addEventListener("pointerdown", (event) => {
+    const group = event.target.closest?.(".graph-node");
+    if (!group) return;
+    const id = group.dataset.entityId;
+    const cluster = professionalElasticCluster(id);
+    const origins = new Map();
+    cluster.forEach((weight, entityId) => {
+      const position = graphState.positions.get(entityId);
+      if (position) origins.set(entityId, { ...position, weight });
+    });
+    professionalUiState.elasticDrag = { id, origins, last: null };
+    graphSurface.classList.add("elastic-dragging");
+  }, { capture: true });
 
-function professionalRelationDistance(relation) {
-  const source = professionalGraphCenter(relation.source_id);
-  const target = professionalGraphCenter(relation.target_id);
-  return source && target ? Math.hypot(target.x - source.x, target.y - source.y) : 0;
-}
-
-function clearProfessionalElasticClasses() {
-  clearTimeout(professionalUiState.cleanupTimer);
-  for (const entry of graphState.nodeElements.values()) {
-    entry.group.classList.remove(
-      "graph-node-elastic-root",
-      "graph-node-elastic-related",
-    );
-  }
-  for (const entry of graphState.edgeElements) {
-    entry.path.classList.remove("graph-edge-elastic");
-    entry.path.style.removeProperty("stroke-width");
-  }
-}
-
-function updateProfessionalElasticVisuals() {
-  const active = professionalUiState.elastic;
-  if (!active) {
-    return;
-  }
-  for (const [id, entry] of graphState.nodeElements.entries()) {
-    entry.group.classList.toggle("graph-node-elastic-root", id === active.rootId);
-    entry.group.classList.toggle(
-      "graph-node-elastic-related",
-      id !== active.rootId && active.weights.has(id),
-    );
-  }
-  for (const entry of graphState.edgeElements) {
-    const related =
-      active.weights.has(entry.relation.source_id) &&
-      active.weights.has(entry.relation.target_id);
-    entry.path.classList.toggle("graph-edge-elastic", related);
-    if (!related) {
-      entry.path.style.removeProperty("stroke-width");
-      continue;
+  graphSurface.addEventListener("pointermove", (event) => {
+    const drag = graphState.drag;
+    const elastic = professionalUiState.elasticDrag;
+    if (!drag || drag.mode !== "node" || !elastic || drag.id !== elastic.id) return;
+    const point = graphPoint(event);
+    const dx = point.x - drag.start.x;
+    const dy = point.y - drag.start.y;
+    elastic.last = { dx, dy };
+    for (const [id, origin] of elastic.origins.entries()) {
+      if (id === drag.id) continue;
+      const position = {
+        x: origin.x + dx * origin.weight,
+        y: origin.y + dy * origin.weight,
+      };
+      graphState.positions.set(id, position);
+      const node = graphState.nodeElements.get(id);
+      node?.group.setAttribute("transform", `translate(${position.x} ${position.y})`);
     }
-    const original = active.edgeLengths.get(entry.relation.id) || 1;
-    const current = professionalRelationDistance(entry.relation) || original;
-    const stretch = Math.min(1, Math.abs(current - original) / Math.max(80, original));
-    entry.path.style.strokeWidth = String(2.4 + stretch * 2.2);
-  }
-}
-
-function flushProfessionalElasticFrame() {
-  professionalUiState.elasticFrame = null;
-  const active = professionalUiState.elastic;
-  if (!active) {
-    return;
-  }
-  const { dx, dy } = active.pending;
-  for (const [id, weight] of active.weights.entries()) {
-    const origin = active.origins.get(id);
-    const position = graphState.positions.get(id);
-    if (!origin || !position) {
-      continue;
+    for (const edge of graphState.edgeElements) {
+      const connected = edge.relation.source_id === drag.id || edge.relation.target_id === drag.id;
+      edge.path.classList.toggle("graph-edge-elastic", connected);
     }
-    position.x = origin.x + dx * weight;
-    position.y = origin.y + dy * weight;
-    const entry = graphState.nodeElements.get(id);
-    entry?.group.setAttribute(
-      "transform",
-      `translate(${position.x} ${position.y})`,
-    );
-  }
-  graphState.userTransformed = true;
-  updateGraphEdges();
-  updateProfessionalElasticVisuals();
-}
+    updateGraphEdges();
+  }, { capture: true });
 
-function scheduleProfessionalElasticFrame() {
-  if (professionalUiState.elasticFrame !== null) {
-    return;
-  }
-  professionalUiState.elasticFrame = requestAnimationFrame(
-    flushProfessionalElasticFrame,
-  );
-}
-
-function beginProfessionalElasticDrag(event) {
-  const group = event.target.closest?.(".graph-node");
-  if (!group || event.button !== 0) {
-    return;
-  }
-  const svg = $("graph");
-  const rootId = group.dataset.entityId;
-  if (!svg || !rootId || !graphState.positions.has(rootId)) {
-    return;
-  }
-
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  stopDynamicGraphMotion();
-  hideGraphNodeTooltip?.();
-  clearProfessionalElasticClasses();
-
-  const weights = professionalElasticCluster(rootId);
-  const origins = new Map();
-  for (const id of weights.keys()) {
-    const position = graphState.positions.get(id);
-    if (position) {
-      origins.set(id, { ...position });
-    }
-  }
-  const edgeLengths = new Map(
-    graphState.edgeElements.map((entry) => [
-      entry.relation.id,
-      professionalRelationDistance(entry.relation),
-    ]),
-  );
-  const start = graphPoint(event);
-  professionalUiState.elastic = {
-    pointerId: event.pointerId,
-    rootId,
-    group,
-    weights,
-    origins,
-    edgeLengths,
-    start,
-    pending: { dx: 0, dy: 0 },
-    moved: false,
-  };
-  graphState.drag = {
-    mode: "elastic-node",
-    pointerId: event.pointerId,
-    id: rootId,
-    moved: false,
-  };
-  svg.setPointerCapture(event.pointerId);
-  svg.classList.add("is-dragging", "is-elastic-dragging");
-  group.classList.add("dragging");
-  updateProfessionalElasticVisuals();
-}
-
-function moveProfessionalElasticDrag(event) {
-  const active = professionalUiState.elastic;
-  if (!active || active.pointerId !== event.pointerId) {
-    return;
-  }
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  const point = graphPoint(event);
-  active.pending = {
-    dx: point.x - active.start.x,
-    dy: point.y - active.start.y,
-  };
-  if (Math.abs(active.pending.dx) + Math.abs(active.pending.dy) > 2) {
-    active.moved = true;
-    if (graphState.drag) {
-      graphState.drag.moved = true;
-    }
-  }
-  scheduleProfessionalElasticFrame();
-}
-
-function finishProfessionalElasticDrag(event) {
-  const active = professionalUiState.elastic;
-  if (!active || active.pointerId !== event.pointerId) {
-    return;
-  }
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  if (professionalUiState.elasticFrame !== null) {
-    cancelAnimationFrame(professionalUiState.elasticFrame);
-    flushProfessionalElasticFrame();
-  }
-
-  const svg = $("graph");
-  if (svg?.hasPointerCapture(event.pointerId)) {
-    svg.releasePointerCapture(event.pointerId);
-  }
-  active.group.classList.remove("dragging");
-  svg?.classList.remove("is-dragging", "is-elastic-dragging");
-  graphState.drag = null;
-
-  if (!active.moved) {
-    const entity = state.entities.get(active.rootId);
-    if (entity) {
-      toggleGraphNodeSelection?.(entity.id);
-      openDrawer(entity);
-    }
-  } else {
-    dynamicGraphState.movableIds = new Set(active.weights.keys());
-    for (const [id, weight] of active.weights.entries()) {
-      dynamicGraphState.velocities.set(id, {
-        x: active.pending.dx * weight * 0.018,
-        y: active.pending.dy * weight * 0.018,
-      });
-    }
+  const finishElastic = () => {
+    const elastic = professionalUiState.elasticDrag;
+    if (!elastic) return;
+    professionalUiState.elasticDrag = null;
+    graphSurface.classList.remove("elastic-dragging");
+    graphState.edgeElements.forEach((entry) => entry.path.classList.remove("graph-edge-elastic"));
+    dynamicGraphState.pendingMotion = true;
+    dynamicGraphState.movableIds = new Set(elastic.origins.keys());
     startDynamicGraphMotion(visibleGraphEntities());
-  }
-
-  professionalUiState.elastic = null;
-  professionalUiState.cleanupTimer = setTimeout(
-    clearProfessionalElasticClasses,
-    ELASTIC_GRAPH.settleMilliseconds,
-  );
+    persistProfessionalWorkspace();
+  };
+  graphSurface.addEventListener("pointerup", finishElastic, { capture: true });
+  graphSurface.addEventListener("pointercancel", finishElastic, { capture: true });
 }
 
-function bindProfessionalElasticGraph() {
-  const svg = $("graph");
-  if (!svg || svg.dataset.elasticDragBound === "true") {
-    return;
-  }
-  svg.dataset.elasticDragBound = "true";
-  svg.addEventListener("pointerdown", beginProfessionalElasticDrag, true);
-  svg.addEventListener("pointermove", moveProfessionalElasticDrag, true);
-  svg.addEventListener("pointerup", finishProfessionalElasticDrag, true);
-  svg.addEventListener("pointercancel", finishProfessionalElasticDrag, true);
-  const help = document.querySelector(".graph-help");
-  if (help) {
-    help.textContent =
-      "Drag a node to move its relationship cluster with elastic falloff. Drag the canvas to pan; use the wheel to zoom.";
-  }
-}
-
-function applyProfessionalDensity() {
-  const compact = professionalUiState.density === "compact";
-  document.body.classList.toggle("ui-density-compact", compact);
-  const button = $("densityToggle");
-  if (button) {
-    button.textContent = compact ? "Compact" : "Comfortable";
-    button.setAttribute("aria-pressed", String(compact));
-    button.title = compact
-      ? "Switch to comfortable density"
-      : "Switch to compact density";
+function professionalVirtualList(root, items, renderItem, key) {
+  if (!root) return;
+  const height = PROFESSIONAL_UI.virtualItemHeight;
+  const viewportHeight = Math.max(root.clientHeight || 480, 160);
+  const scrollTop = root.scrollTop || 0;
+  const start = Math.max(0, Math.floor(scrollTop / height) - PROFESSIONAL_UI.virtualOverscan);
+  const count = Math.ceil(viewportHeight / height) + PROFESSIONAL_UI.virtualOverscan * 2;
+  const end = Math.min(items.length, start + count);
+  const shell = professionalElement("div", "professional-virtual-shell");
+  shell.style.height = `${items.length * height}px`;
+  const slice = professionalElement("div", "professional-virtual-slice");
+  slice.style.transform = `translateY(${start * height}px)`;
+  for (let index = start; index < end; index += 1) slice.append(renderItem(items[index], index));
+  shell.append(slice);
+  root.replaceChildren(shell);
+  professionalUiState.virtual[key] = { items, renderItem };
+  if (root.dataset.virtualBound !== "true") {
+    root.dataset.virtualBound = "true";
+    root.addEventListener("scroll", () => {
+      const value = professionalUiState.virtual[key];
+      if (value) professionalVirtualList(root, value.items, value.renderItem, key);
+    }, { passive: true });
   }
 }
 
-function buildProfessionalTopbarControls() {
-  const topbar = document.querySelector(".topbar");
-  const connection = $("connection");
-  if (!topbar || !connection || $("densityToggle")) {
-    return;
+const renderEntitiesBeforeVirtual = renderEntities;
+renderEntities = function renderVirtualEntities() {
+  const root = $("entities");
+  if (!root) return;
+  const items = [...state.entities.values()].filter(entityMatches);
+  professionalVirtualList(root, items, (entity) => {
+    const row = professionalElement("button", "professional-entity-row");
+    row.type = "button";
+    row.append(
+      professionalElement("span", "professional-entity-kind", entity.type),
+      professionalElement("strong", "", entity.name),
+      professionalElement("small", "", entity.status || ""),
+    );
+    row.addEventListener("click", () => openDrawer(entity));
+    return row;
+  }, "entities");
+};
+
+const renderEventsBeforeVirtual = renderEvents;
+renderEvents = function renderVirtualEvents() {
+  const root = $("events");
+  if (!root) return;
+  const items = state.events;
+  professionalVirtualList(root, items, (item) => {
+    const row = professionalElement("button", "professional-event-row");
+    row.type = "button";
+    const payload = JSON.stringify(item.payload || {});
+    row.textContent = `${item.seq} ${item.timestamp} ${item.event} ${payload}`;
+    row.title = row.textContent;
+    row.addEventListener("click", () => {
+      $("drawerTitle").textContent = `event: ${item.event}`;
+      $("drawerBody").textContent = JSON.stringify(item, null, 2);
+      $("drawer").classList.add("open");
+      $("drawer").setAttribute("aria-hidden", "false");
+      $("drawerBackdrop").hidden = false;
+    });
+    return row;
+  }, "events");
+};
+
+function workspaceKey() {
+  return state.scanId ? `sqliblind.workspace.${state.scanId}` : null;
+}
+
+function persistProfessionalWorkspace() {
+  const key = workspaceKey();
+  if (!key) return;
+  const now = Date.now();
+  if (now - professionalUiState.lastPersistAt < PROFESSIONAL_UI.persistInterval) return;
+  professionalUiState.lastPersistAt = now;
+  const positions = {};
+  for (const [id, point] of graphState.positions.entries()) positions[id] = point;
+  const payload = {
+    activePane: state.activePane,
+    filter: state.filter,
+    density: professionalUiState.density,
+    treeOpen: [...professionalUiState.treeOpen],
+    tableOpen: [...professionalUiState.tableOpen],
+    graph: { positions, transform: graphState.transform },
+    panelWidth: getComputedStyle(document.documentElement).getPropertyValue("--details-width").trim(),
+  };
+  try { localStorage.setItem(key, JSON.stringify(payload)); } catch { /* quota or privacy mode */ }
+}
+
+function restoreProfessionalWorkspace() {
+  const key = workspaceKey();
+  if (!key || professionalUiState.workspaceLoadedFor === state.scanId) return;
+  professionalUiState.workspaceLoadedFor = state.scanId;
+  let payload = null;
+  try { payload = JSON.parse(localStorage.getItem(key) || "null"); } catch { payload = null; }
+  if (!payload) return;
+  state.filter = String(payload.filter || "");
+  if ($("filter")) $("filter").value = state.filter;
+  professionalUiState.density = payload.density === "comfortable" ? "comfortable" : "compact";
+  professionalUiState.treeOpen = new Set(payload.treeOpen || []);
+  professionalUiState.tableOpen = new Set(payload.tableOpen || []);
+  graphState.transform = payload.graph?.transform || graphState.transform;
+  for (const [id, point] of Object.entries(payload.graph?.positions || {})) {
+    if (state.entities.has(id)) graphState.positions.set(id, point);
   }
-  const tools = professionalElement("div", "professional-topbar-tools");
-  const shortcuts = professionalElement(
-    "span",
-    "view-shortcuts",
-    "1–5 views · / filter",
-  );
-  const density = professionalElement("button", "density-toggle", "Compact");
-  density.id = "densityToggle";
-  density.type = "button";
-  density.addEventListener("click", () => {
-    professionalUiState.density =
-      professionalUiState.density === "compact" ? "comfortable" : "compact";
-    localStorage.setItem("sqliblind.ui.density", professionalUiState.density);
-    applyProfessionalDensity();
-  });
-  tools.append(shortcuts, density);
-  connection.before(tools);
+  if (payload.panelWidth) document.documentElement.style.setProperty("--details-width", payload.panelWidth);
   applyProfessionalDensity();
 }
 
-function professionalTabCounts() {
-  const counts = { schema: 0, table: 0, column: 0, row: 0, cell: 0 };
-  for (const entity of state.entities.values()) {
-    if (entity.type in counts) {
-      counts[entity.type] += 1;
-    }
+const selectScanBeforeWorkspace = selectScan;
+selectScan = async function selectScanWithWorkspace(id) {
+  professionalUiState.workspaceLoadedFor = null;
+  await selectScanBeforeWorkspace(id);
+  restoreProfessionalWorkspace();
+  renderAll();
+};
+
+function applyProfessionalDensity() {
+  document.body.classList.toggle("ui-density-compact", professionalUiState.density === "compact");
+  document.body.classList.toggle("ui-density-comfortable", professionalUiState.density === "comfortable");
+  localStorage.setItem("sqliblind.ui.density", professionalUiState.density);
+}
+
+function installProfessionalToolbar() {
+  const controls = document.querySelector(".controls");
+  if (!controls || $("professionalDensity")) return;
+  const select = professionalElement("select");
+  select.id = "professionalDensity";
+  select.setAttribute("aria-label", "Interface density");
+  for (const value of ["compact", "comfortable"]) {
+    const option = professionalElement("option", "", value[0].toUpperCase() + value.slice(1));
+    option.value = value;
+    option.selected = value === professionalUiState.density;
+    select.append(option);
   }
-  return {
+  select.addEventListener("change", () => {
+    professionalUiState.density = select.value;
+    applyProfessionalDensity();
+    persistProfessionalWorkspace();
+  });
+  controls.append(select);
+}
+
+function updateProfessionalTabCounts() {
+  const counts = {
     tree: state.entities.size,
-    graph: state.relationships.size,
-    tables: counts.table,
+    graph: state.entities.size,
+    tables: [...state.entities.values()].filter((e) => e.type === "table").length,
     entities: state.entities.size,
     events: state.events.length,
   };
-}
-
-function updateProfessionalTabBadges() {
-  const counts = professionalTabCounts();
-  const defaults = {
-    tree: "Tree",
-    graph: "Graph",
-    tables: "Tables",
-    entities: "Entities",
-    events: "Events",
-  };
   document.querySelectorAll("[data-pane]").forEach((button) => {
-    const pane = button.dataset.pane;
-    if (!(pane in defaults)) {
-      return;
+    let badge = button.querySelector(".professional-tab-count");
+    if (!badge) {
+      badge = professionalElement("span", "professional-tab-count");
+      button.append(badge);
     }
-    const label = professionalElement("span", "", defaults[pane]);
-    const badge = professionalElement(
-      "span",
-      "professional-tab-count",
-      counts[pane],
-    );
-    button.replaceChildren(label, badge);
+    badge.textContent = String(counts[button.dataset.pane] || 0);
   });
 }
 
-function activateProfessionalPane(name) {
-  document.querySelector(`[data-pane="${name}"]`)?.click();
-}
+const renderAllBeforeProfessional = renderAll;
+renderAll = function renderAllProfessional() {
+  restoreProfessionalWorkspace();
+  renderAllBeforeProfessional();
+  updateProfessionalTabCounts();
+};
 
-function bindProfessionalKeyboardShortcuts() {
-  if (document.body.dataset.professionalKeysBound === "true") {
-    return;
-  }
-  document.body.dataset.professionalKeysBound = "true";
-  const panes = { "1": "tree", "2": "graph", "3": "tables", "4": "entities", "5": "events" };
+function bindProfessionalShortcuts() {
   document.addEventListener("keydown", (event) => {
-    const target = event.target;
-    const editing =
-      target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement ||
-      target instanceof HTMLSelectElement ||
-      target?.isContentEditable;
-    if (event.key === "/" && !editing && !event.ctrlKey && !event.metaKey) {
+    if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return;
+    const tag = event.target?.tagName?.toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+    if (event.key === "/") {
       event.preventDefault();
       $("filter")?.focus();
       return;
     }
-    if (editing || event.ctrlKey || event.metaKey || event.altKey) {
-      return;
-    }
-    if (event.key in panes) {
-      event.preventDefault();
-      activateProfessionalPane(panes[event.key]);
-    }
+    const pane = { "1": "tree", "2": "graph", "3": "tables", "4": "entities", "5": "events" }[event.key];
+    if (pane) document.querySelector(`[data-pane="${pane}"]`)?.click();
   });
 }
 
-const renderAllBeforeProfessionalUi = renderAll;
-renderAll = function renderAllProfessionally() {
-  renderAllBeforeProfessionalUi();
-  ensureProfessionalTableToolbar();
-  updateProfessionalTabBadges();
-  bindProfessionalElasticGraph();
-};
-
-function initializeProfessionalUi() {
-  if (professionalUiState.initialized) {
-    return;
-  }
-  professionalUiState.initialized = true;
-  buildProfessionalTopbarControls();
-  bindProfessionalKeyboardShortcuts();
-  bindProfessionalElasticGraph();
-  ensureProfessionalTableToolbar();
-  renderAll();
+function bindPanelResize() {
+  if (professionalUiState.resizersBound) return;
+  professionalUiState.resizersBound = true;
+  const drawer = $("drawer");
+  if (!drawer) return;
+  const handle = professionalElement("button", "professional-resize-handle");
+  handle.type = "button";
+  handle.setAttribute("aria-label", "Resize details panel");
+  drawer.prepend(handle);
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = drawer.getBoundingClientRect().width;
+    handle.setPointerCapture(event.pointerId);
+    const move = (next) => {
+      const width = Math.max(300, Math.min(window.innerWidth * 0.82, startWidth + startX - next.clientX));
+      document.documentElement.style.setProperty("--details-width", `${width}px`);
+    };
+    const end = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      persistProfessionalWorkspace();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+  });
 }
 
-queueMicrotask(initializeProfessionalUi);
+applyProfessionalDensity();
+installProfessionalToolbar();
+bindProfessionalShortcuts();
+bindPanelResize();

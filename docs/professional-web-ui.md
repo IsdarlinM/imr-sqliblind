@@ -1,40 +1,58 @@
 # Professional web workspace
 
-The web console adds a presentation layer on top of the existing scan engine. It does not alter extraction payloads, oracle decisions, request limits, authentication, CSRF handling, or persistence.
+The web console is optimized for large database maps while preserving the existing authenticated, CSRF-protected and CSP-restricted execution model.
 
-## Compact hierarchy
+## Hierarchical tree
 
-The Tree view uses native `details` and `summary` controls. Schemas are expanded initially while tables, columns, rows, and cells remain collapsible. Filtering automatically opens matching branches. The toolbar can expand schemas, expand everything, or collapse the complete tree.
-
-Only open branches render their descendants. This reduces DOM size when a scan contains many tables, columns, rows, or cells.
+The Tree view uses native `details` and `summary` controls. Schemas are initially visible, while tables, columns, rows and cells can be expanded only when needed. Filtering automatically opens matching branches. The interface records expanded branches per scan in browser-local workspace state.
 
 ## Compact table view
 
-Each discovered table is represented by one collapsed summary row containing its fully qualified name, status, column count, and row count. Column chips and row data are created only when the table is expanded.
+Each discovered table starts as a collapsed summary. Column chips and native HTML row tables are built only after expansion, reducing initial DOM size. `Expand visible` and `Collapse all` operate on the filtered set. HTML exports temporarily render all table bodies so exported reports remain complete.
 
-The view includes controls to expand visible tables or collapse them all. HTML exports temporarily expand every table so the exported report remains complete.
+## Elastic graph interactions
 
-## Elastic graph interaction
-
-Dragging a graph node moves the connected relationship cluster using distance-based falloff:
+Dragging a node propagates movement through related nodes with bounded falloff:
 
 - selected node: 100%
-- direct relation: 58%
-- distance two: 34%
-- distance three: 20%
-- distance four: 12%
+- first relationship level: 58%
+- second level: 34%
+- third level: 20%
+- fourth level: 12%
 
-The propagation is bounded to 120 nodes to keep pointer interaction responsive on large scans. Related edges use animated elastic styling while dragging. On release, the existing collision and relationship-force simulation settles the affected cluster.
+Propagation stops after four levels or 120 nodes. Curved relationship paths are recalculated during pointer movement. On release, the existing collision and relationship-force simulation settles the affected cluster.
 
-## Workspace controls
+Advanced controls can hide node types, center the selected node, isolate direct relationships and restore all nodes. Graph positions, zoom and pan are persisted per scan.
 
-- Compact and comfortable density modes, persisted in local storage.
-- Sticky scan controls and result tabs on desktop.
-- Per-view result counters.
-- `/` focuses the global filter.
-- Number keys `1` through `5` select Tree, Graph, Tables, Entities, and Events.
-- Reduced-motion preferences disable decorative edge animation.
+## Large result sets
 
-## Security and performance
+Events and flat entities use fixed-height windowed rendering with overscan. Only visible rows and a small buffer exist in the DOM. Raw data remains in application state and selected rows can still open the details drawer.
 
-The implementation uses DOM construction and `textContent`; it does not use `innerHTML`, `eval`, or dynamic code generation. Existing same-origin CSP, authenticated asset loading, CSRF controls, and no-store response headers remain unchanged.
+## Session comparison
+
+The comparison panel loads two stored snapshots and compares canonical hierarchy signatures. It lists added, removed and changed entities without requiring another scan.
+
+## Workspace and ergonomics
+
+Per-scan browser state retains:
+
+- active result view
+- filter
+- tree branches
+- open table cards
+- graph positions, zoom and pan
+- details panel width
+- compact or comfortable density
+
+Keyboard shortcuts:
+
+- `/`: focus global result filter
+- `1`: Tree
+- `2`: Graph
+- `3`: Tables
+- `4`: Entities
+- `5`: Events
+
+## Security
+
+The feature layer constructs DOM nodes and assigns text through `textContent`. It does not use `innerHTML`, `eval`, dynamic script injection or third-party CDNs. Authentication, CSRF validation, CSP, response security headers, TLS behavior, request limits and redaction behavior are unchanged.
