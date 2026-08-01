@@ -17,7 +17,13 @@ class PackagingTests(unittest.TestCase):
         metadata = tomllib.loads(
             (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         )
-        self.assertEqual(metadata["project"]["version"], "0.7.0")
+        package_version = (
+            (ROOT / "src" / "blind_sqli" / "__init__.py")
+            .read_text(encoding="utf-8")
+            .split('__version__ = "', 1)[1]
+            .split('"', 1)[0]
+        )
+        self.assertEqual(metadata["project"]["version"], package_version)
         self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
         self.assertIn("web", metadata["project"]["optional-dependencies"])
         package_data = metadata["tool"]["setuptools"]["package-data"][
