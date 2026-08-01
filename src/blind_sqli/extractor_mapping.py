@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
-
 from .events import entity_id
-from .extractor_common import protect_sensitive_value
+from .extractor_common import ExtractionError, protect_sensitive_value
 from .extractor_inference import InferenceExtractor
 from .models import DatabaseMap, ExtractionJob, Schema, Table
 
@@ -226,6 +224,108 @@ class BlindExtractor(InferenceExtractor):
             )
             return len(table.rows), truncated, bytes_used
 
+    @staticmethod
+    def _require_complete_counts(
+        values: dict[str, tuple[int, bool]],
+        maximum: int,
+        kind: str,
+    ) -> dict[str, int]:
+        complete: dict[str, int] = {}
+        for key, (value, truncated) in values.items():
+            if truncated:
+                raise ExtractionError(
+                    f"{kind} count exceeds configured maximum ({maximum}) for {key}."
+                )
+            complete[key] = value
+        return complete
+
+    def _discover_schema_tables(
+        self,
+        database: DatabaseMap,
+        schema_name: str,
+        table_count: int,
+    ) -> tuple[Schema, list[tuple[ExtractionJob, Table]]]:
+        schema = database.add_schema(Schema(schema_name))
+        schema_identifier = entity_id("schema", schema_name)
+        table_jobs = [
+            ExtractionJob(
+                f"table:{index}",
+                self.dialect.table_name_expression(schema_name, index),
+            )
+            for index in range(table_count)
+        ]
+
+        def on_table(_job: ExtractionJob, table_name: str) -> None:
+            self._emit_entity(
+                kind="table",
+                name=table_name,
+                entity_key=(schema_name, table_name),
+                parent_id=schema_identifier,
+                data={"schema": schema_name, "table": table_name},
+            )
+
+        table_values = self.extract_many(table_jobs, on_result=on_table)
+        tables: list[tuple[ExtractionJob, Table]] = []
+        for job in table_jobs:
+            table = schema.add_table(Table(table_values[job.key]))
+            tables.append((job, table))
+        return schema, tables
+
+    def _discover_schema_columns(
+        self,
+        schema_name: str,
+        tables: list[tuple[ExtractionJob, Table]],
+    ) -> None:
+        count_expressions = {
+            job.key: self.dialect.column_count_expression(
+                schema_name,
+                table.name,
+            )
+            for job, table in tables
+        }
+        column_counts = self._require_complete_counts(
+            self.infer_many_integers_capped(
+                count_expressions,
+                self.config.max_items,
+            ),
+            self.config.max_items,
+            "column",
+        )
+        column_jobs: list[ExtractionJob] = []
+        locations: dict[str, Table] = {}
+        for table_job, table in tables:
+            for column_index in range(column_counts[table_job.key]):
+                key = f"{table_job.key}:column:{column_index}"
+                column_jobs.append(
+                    ExtractionJob(
+                        key,
+                        self.dialect.column_name_expression(
+                            schema_name,
+                            table.name,
+                            column_index,
+                        ),
+                    )
+                )
+                locations[key] = table
+
+        def on_column(job: ExtractionJob, column_name: str) -> None:
+            table = locations[job.key]
+            self._emit_entity(
+                kind="column",
+                name=column_name,
+                entity_key=(schema_name, table.name, column_name),
+                parent_id=entity_id("table", schema_name, table.name),
+                data={
+                    "schema": schema_name,
+                    "table": table.name,
+                    "column": column_name,
+                },
+            )
+
+        values = self.extract_many(column_jobs, on_result=on_column)
+        for job in column_jobs:
+            locations[job.key].add_column(values[job.key])
+
     def build_database_map(
         self,
         *,
@@ -238,7 +338,14 @@ class BlindExtractor(InferenceExtractor):
         max_data_bytes: int = 10_000,
         reveal_sensitive_values: bool = False,
     ) -> DatabaseMap:
-        """Pipeline schema names, table counts, names, and column counts."""
+        """Discover schemas smallest-first and finish each before continuing.
+
+        Schema size is defined by its table count because that bounded metadata is
+        available before any table name or contents must be extracted. All table
+        names in a schema are resolved first; then all columns and bounded rows are
+        completed before the next schema begins.
+        """
+        self._emit("phase.started", phase="schemas")
         schema_count = self.infer_integer(
             self.dialect.schema_count_expression(),
             self.config.max_items,
@@ -247,134 +354,77 @@ class BlindExtractor(InferenceExtractor):
             ExtractionJob(str(index), self.dialect.schema_name_expression(index))
             for index in range(schema_count)
         ]
-        table_count_futures: dict[str, Future[int]] = {}
-        count_workers = min(max(1, self.config.workers // 3), 4)
+        schema_names_by_key = self.extract_many(schema_jobs)
+        schema_names = [schema_names_by_key[job.key] for job in schema_jobs]
 
-        with ThreadPoolExecutor(
-            max_workers=count_workers,
-            thread_name_prefix="sqliblind-pipeline",
-        ) as count_pool:
-
-            def on_schema(_job: ExtractionJob, schema_name: str) -> None:
-                self._emit_entity(
-                    kind="schema",
-                    name=schema_name,
-                    entity_key=(schema_name,),
-                    data={"schema": schema_name},
-                )
-                table_count_futures[schema_name] = count_pool.submit(
-                    self.infer_integer,
-                    self.dialect.table_count_expression(schema_name),
-                    self.config.max_items,
-                )
-
-            schema_names = list(
-                self.extract_many(schema_jobs, on_result=on_schema).values()
+        table_count_expressions = {
+            schema_name: self.dialect.table_count_expression(schema_name)
+            for schema_name in schema_names
+        }
+        table_counts = self._require_complete_counts(
+            self.infer_many_integers_capped(
+                table_count_expressions,
+                self.config.max_items,
+            ),
+            self.config.max_items,
+            "table",
+        )
+        ordered_schemas = sorted(
+            schema_names,
+            key=lambda name: (table_counts[name], name.casefold()),
+        )
+        database = DatabaseMap()
+        for priority, schema_name in enumerate(ordered_schemas, 1):
+            self._emit_entity(
+                kind="schema",
+                name=schema_name,
+                entity_key=(schema_name,),
+                data={
+                    "schema": schema_name,
+                    "table_count": table_counts[schema_name],
+                    "discovery_priority": priority,
+                },
             )
-            database = DatabaseMap([Schema(name) for name in schema_names])
-            table_jobs: list[ExtractionJob] = []
-            table_locations: dict[str, tuple[int, str]] = {}
-            for schema_index, schema_name in enumerate(schema_names):
-                count = table_count_futures[schema_name].result()
-                for table_index in range(count):
-                    key = f"s{schema_index}:t{table_index}"
-                    table_jobs.append(
-                        ExtractionJob(
-                            key,
-                            self.dialect.table_name_expression(
-                                schema_name,
-                                table_index,
-                            ),
-                        )
-                    )
-                    table_locations[key] = schema_index, schema_name
+        self._emit(
+            "phase.completed",
+            phase="schemas",
+            count=len(ordered_schemas),
+            order=ordered_schemas,
+        )
 
-            column_count_futures: dict[str, Future[int]] = {}
+        selectors = {value.casefold() for value in data_tables or set()}
+        remaining_bytes = max_data_bytes
+        discover_columns = include_columns or include_data
 
-            def on_table(job: ExtractionJob, table_name: str) -> None:
-                _, schema_name = table_locations[job.key]
-                self._emit_entity(
-                    kind="table",
-                    name=table_name,
-                    entity_key=(schema_name, table_name),
-                    parent_id=entity_id("schema", schema_name),
-                    data={"schema": schema_name, "table": table_name},
-                )
-                if include_columns:
-                    column_count_futures[job.key] = count_pool.submit(
-                        self.infer_integer,
-                        self.dialect.column_count_expression(
-                            schema_name,
-                            table_name,
-                        ),
-                        self.config.max_items,
-                    )
+        for priority, schema_name in enumerate(ordered_schemas, 1):
+            self.control.checkpoint()
+            table_count = table_counts[schema_name]
+            phase = f"schema:{schema_name}"
+            self._emit(
+                "phase.started",
+                phase=phase,
+                schema=schema_name,
+                priority=priority,
+                table_count=table_count,
+            )
+            _schema, tables = self._discover_schema_tables(
+                database,
+                schema_name,
+                table_count,
+            )
 
-            table_values = self.extract_many(table_jobs, on_result=on_table)
-            table_objects: dict[str, Table] = {}
-            for job in table_jobs:
-                schema_index, _ = table_locations[job.key]
-                table_objects[job.key] = database.schemas[
-                    schema_index
-                ].add_table(Table(table_values[job.key]))
+            if discover_columns and tables:
+                self._discover_schema_columns(schema_name, tables)
 
-            if include_columns:
-                column_jobs: list[ExtractionJob] = []
-                column_locations: dict[str, tuple[str, str, Table]] = {}
-                for table_job in table_jobs:
-                    _, schema_name = table_locations[table_job.key]
-                    table_name = table_values[table_job.key]
-                    count = column_count_futures[table_job.key].result()
-                    for column_index in range(count):
-                        key = f"{table_job.key}:c{column_index}"
-                        column_jobs.append(
-                            ExtractionJob(
-                                key,
-                                self.dialect.column_name_expression(
-                                    schema_name,
-                                    table_name,
-                                    column_index,
-                                ),
-                            )
-                        )
-                        column_locations[key] = (
-                            schema_name,
-                            table_name,
-                            table_objects[table_job.key],
-                        )
-
-                def on_column(job: ExtractionJob, column_name: str) -> None:
-                    schema_name, table_name, _ = column_locations[job.key]
-                    self._emit_entity(
-                        kind="column",
-                        name=column_name,
-                        entity_key=(schema_name, table_name, column_name),
-                        parent_id=entity_id("table", schema_name, table_name),
-                        data={
-                            "schema": schema_name,
-                            "table": table_name,
-                            "column": column_name,
-                        },
-                    )
-
-                column_values = self.extract_many(
-                    column_jobs,
-                    on_result=on_column,
-                )
-                for job in column_jobs:
-                    _, _, table = column_locations[job.key]
-                    table.add_column(column_values[job.key])
-
-        if include_data:
-            selectors = {value.casefold() for value in data_tables or set()}
-            remaining_bytes = max_data_bytes
-            for schema in database.schemas:
-                for table in schema.tables:
-                    selector = f"{schema.name}.{table.name}".casefold()
-                    if selector not in selectors:
+            rows_extracted = 0
+            bytes_used = 0
+            if include_data and remaining_bytes > 0:
+                for _job, table in tables:
+                    selector = f"{schema_name}.{table.name}".casefold()
+                    if selectors and selector not in selectors:
                         continue
-                    _, _, used = self.extract_table_rows(
-                        schema.name,
+                    count, _truncated, used = self.extract_table_rows(
+                        schema_name,
                         table,
                         max_rows=max_rows,
                         max_columns=max_data_columns,
@@ -382,7 +432,26 @@ class BlindExtractor(InferenceExtractor):
                         max_data_bytes=remaining_bytes,
                         reveal_sensitive_values=reveal_sensitive_values,
                     )
+                    rows_extracted += count
+                    bytes_used += used
                     remaining_bytes -= used
                     if remaining_bytes <= 0:
-                        return database
+                        self._emit(
+                            "data.budget_exhausted",
+                            schema=schema_name,
+                            table=table.name,
+                            max_data_bytes=max_data_bytes,
+                        )
+                        break
+
+            self._emit(
+                "phase.completed",
+                phase=phase,
+                schema=schema_name,
+                priority=priority,
+                tables=len(tables),
+                columns=sum(len(table.columns) for _job, table in tables),
+                rows=rows_extracted,
+                data_bytes=bytes_used,
+            )
         return database
