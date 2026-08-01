@@ -10,6 +10,7 @@ try:
 except ModuleNotFoundError:  # Python 3.10
     import tomli as tomllib
 
+from blind_sqli import __version__
 from blind_sqli.cli import build_parser
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +22,7 @@ class BrandingTests(unittest.TestCase):
             (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         )
         self.assertEqual(metadata["project"]["name"], "imr-sqliblind")
-        self.assertEqual(metadata["project"]["version"], "0.7.0")
+        self.assertEqual(metadata["project"]["version"], __version__)
         self.assertEqual(metadata["project"]["requires-python"], ">=3.10")
         self.assertEqual(
             metadata["project"]["scripts"],
