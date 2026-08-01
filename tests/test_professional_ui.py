@@ -13,6 +13,9 @@ class ProfessionalUiTests(unittest.TestCase):
         cls.javascript = (WEBUI / "professional-ui.js").read_text(
             encoding="utf-8"
         )
+        cls.runtime = (WEBUI / "professional-ui-runtime.js").read_text(
+            encoding="utf-8"
+        )
         cls.styles = (WEBUI / "professional-ui.css").read_text(
             encoding="utf-8"
         )
@@ -23,6 +26,7 @@ class ProfessionalUiTests(unittest.TestCase):
     def test_professional_assets_are_loaded_last(self) -> None:
         self.assertIn('"professional-ui.css"', self.support)
         self.assertIn('"professional-ui.js"', self.support)
+        self.assertIn('"professional-ui-runtime.js"', self.support)
         self.assertLess(
             self.support.index('"table-view.css"'),
             self.support.index('"professional-ui.css"'),
@@ -30,6 +34,10 @@ class ProfessionalUiTests(unittest.TestCase):
         self.assertLess(
             self.support.index('"table-view-runtime.js"'),
             self.support.index('"professional-ui.js"'),
+        )
+        self.assertLess(
+            self.support.index('"professional-ui.js"'),
+            self.support.index('"professional-ui-runtime.js"'),
         )
 
     def test_tree_and_tables_use_native_collapsible_controls(self) -> None:
@@ -49,11 +57,19 @@ class ProfessionalUiTests(unittest.TestCase):
         self.assertIn("startDynamicGraphMotion", self.javascript)
         self.assertIn("graph-edge-elastic", self.javascript)
         self.assertIn("elastic-edge-flow", self.styles)
+        self.assertIn("renderGraphWithoutInterruptingElasticDrag", self.runtime)
+
+    def test_complete_html_export_and_scan_reset_are_preserved(self) -> None:
+        self.assertIn("tableViewCompleteProfessionalHtmlReport", self.runtime)
+        self.assertIn("professionalUiState.tableExpanded.add", self.runtime)
+        self.assertIn("resetProfessionalWorkspace", self.runtime)
+        self.assertIn("cancelAnimationFrame", self.runtime)
 
     def test_ui_avoids_unsafe_html_injection(self) -> None:
-        self.assertNotIn("innerHTML", self.javascript)
-        self.assertNotIn("insertAdjacentHTML", self.javascript)
-        self.assertNotIn("eval(", self.javascript)
+        combined = f"{self.javascript}\n{self.runtime}"
+        self.assertNotIn("innerHTML", combined)
+        self.assertNotIn("insertAdjacentHTML", combined)
+        self.assertNotIn("eval(", combined)
 
     def test_density_shortcuts_and_responsive_rules_exist(self) -> None:
         self.assertIn("sqliblind.ui.density", self.javascript)
