@@ -71,6 +71,7 @@ def load_asset(name: str) -> str:
             "table-view.js",
             "table-view-runtime.js",
             "professional-ui.js",
+            "professional-ui-runtime.js",
         ],
     }.get(name, [])
     for companion in companions:
