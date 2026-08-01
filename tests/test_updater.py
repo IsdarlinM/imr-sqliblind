@@ -7,7 +7,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from blind_sqli import updater
+from blind_sqli import __version__, updater
 from blind_sqli.entrypoint import main as entrypoint_main
 
 
@@ -19,19 +19,21 @@ class UpdaterTests(unittest.TestCase):
 
     def test_remote_version_check(self) -> None:
         response = Mock()
-        response.text = '__version__ = "0.8.0"\n'
+        response.text = '__version__ = "0.8.2"\n'
         response.raise_for_status.return_value = None
         with patch("blind_sqli.updater.requests.get", return_value=response):
-            self.assertEqual(updater.fetch_available_version(timeout=3), "0.8.0")
+            self.assertEqual(updater.fetch_available_version(timeout=3), "0.8.2")
 
     def test_check_reports_available_version(self) -> None:
+        installed = updater.parse_version(__version__)
+        available = f"{installed[0]}.{installed[1]}.{installed[2] + 1}"
         with patch(
             "blind_sqli.updater.fetch_available_version",
-            return_value="0.8.0",
+            return_value=available,
         ):
             status = updater.check_for_updates()
-        self.assertEqual(status.installed_version, "0.7.0")
-        self.assertEqual(status.available_version, "0.8.0")
+        self.assertEqual(status.installed_version, __version__)
+        self.assertEqual(status.available_version, available)
         self.assertTrue(status.update_available)
 
     def test_checkout_discovery(self) -> None:
