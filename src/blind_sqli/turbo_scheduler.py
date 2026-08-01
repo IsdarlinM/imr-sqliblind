@@ -5,7 +5,8 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from .extractor_common import ExtractionError, job_activity
+from .dialects import sql_literal
+from .extractor_common import job_activity
 from .inference_scheduler import InferenceSchedulingMixin
 from .models import ExtractionJob
 
@@ -275,8 +276,6 @@ class TurboSchedulingMixin(InferenceSchedulingMixin):
     ) -> bool:
         if truncated:
             return False
-        from .dialects import sql_literal
-
         self._metric("batch_confirmations")
         condition = (
             f"({self.dialect.text_expression(job.expression)}) = "
