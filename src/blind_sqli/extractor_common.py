@@ -20,7 +20,7 @@ from .models import ExtractionJob, ProbeResult
 from .oracle import ResponseOracle
 
 MAX_WORKERS = 64
-INFERENCE_MODES = {"adaptive", "binary", "bitwise"}
+INFERENCE_MODES = {"adaptive", "binary", "bitwise", "turbo"}
 MAX_ADAPTIVE_ALPHABET = 512
 
 SENSITIVE_COLUMN_PARTS = {
@@ -150,6 +150,10 @@ class ExtractorBase:
             "bit_probes": 0,
             "partition_probes": 0,
             "binary_probes": 0,
+            "vector_integer_probes": 0,
+            "checksum_probes": 0,
+            "checksum_fallbacks": 0,
+            "batch_confirmations": 0,
         }
 
     def _emit(self, event_type: str, **payload: object) -> None:
