@@ -35,7 +35,10 @@ jobs:
       - name: Pytest
         run: pytest -q
       - name: Validate web JavaScript
-        run: node --check src/blind_sqli/webui/app.js
+        run: |
+          for script in src/blind_sqli/webui/*.js; do
+            node --check "$script"
+          done
       - name: Ruff
         run: ruff check .
       - name: Bandit
@@ -56,6 +59,15 @@ jobs:
           ./install.sh --prefix "$RUNNER_TEMP/imr-sqliblind" --no-path
           "$RUNNER_TEMP/imr-sqliblind/bin/sqliblind" --version
           "$RUNNER_TEMP/imr-sqliblind/bin/sqliblind" web --help
+      - name: Validate service lifecycle
+        run: |
+          set -eu
+          command="$RUNNER_TEMP/imr-sqliblind/bin/sqliblind"
+          trap '"$command" stop >/dev/null 2>&1 || true' EXIT
+          "$command" start
+          "$command" status
+          "$command" stop
+          trap - EXIT
       - name: Uninstall
         run: |
           ./uninstall.sh --prefix "$RUNNER_TEMP/imr-sqliblind" --no-path
@@ -78,6 +90,18 @@ jobs:
           sqliblind --version
           sqliblind web --help
           powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$bin=(Join-Path $env:RUNNER_TEMP 'imr-sqliblind\bin').TrimEnd('\'); $current=[Environment]::GetEnvironmentVariable('Path','User'); $found=$false; if($current){ foreach($item in $current.Split(';')){ if($item -and $item.TrimEnd('\') -ieq $bin){ $found=$true; break } } }; if(-not $found){ exit 1 }"
+      - name: Validate service lifecycle
+        shell: cmd
+        run: |
+          sqliblind start
+          if errorlevel 1 exit /b 1
+          sqliblind status
+          if errorlevel 1 (
+            sqliblind stop
+            exit /b 1
+          )
+          sqliblind stop
+          if errorlevel 1 exit /b 1
       - name: Uninstall and clean persistent PATH
         shell: cmd
         run: |
