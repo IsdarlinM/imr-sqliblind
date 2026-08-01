@@ -61,9 +61,9 @@ def create_app(
         length_tolerance: int = Field(default=0, ge=0, le=100_000)
         timeout: float = Field(default=10.0, gt=0, le=120)
         retries: int = Field(default=1, ge=0, le=5)
-        delay: float = Field(default=0.1, ge=0, le=60)
+        delay: float = Field(default=0.0, ge=0, le=60)
         max_requests: int = Field(default=5000, ge=1, le=1_000_000)
-        workers: int = Field(default=4, ge=1, le=16)
+        workers: int = Field(default=16, ge=1, le=16)
         max_length: int = Field(default=128, ge=1, le=4096)
         max_items: int = Field(default=128, ge=1, le=4096)
         min_char_code: int = Field(default=32, ge=0, le=0x10FFFF)
@@ -73,14 +73,14 @@ def create_app(
         proxy: str | None = Field(default=None, max_length=2048)
         insecure: bool = False
         skip_calibration: bool = False
-        include_data: bool = False
+        include_data: bool = True
         data_tables: str | list[str] = ""
         max_rows: int = Field(default=5, ge=1, le=25)
         max_data_columns: int = Field(default=10, ge=1, le=20)
         max_value_length: int = Field(default=128, ge=1, le=512)
         max_data_bytes: int = Field(default=10_000, ge=1, le=50_000)
         reveal_sensitive_values: bool = False
-        inference_mode: str = "adaptive"
+        inference_mode: str = "turbo"
         parallel_characters: bool = True
         adaptive_confirmation: bool = True
         adaptive_concurrency: bool = True
