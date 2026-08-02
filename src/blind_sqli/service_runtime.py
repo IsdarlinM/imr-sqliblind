@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import socket
 import ssl
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -157,6 +159,58 @@ def _control_request(
     return value if isinstance(value, dict) else None
 
 
+def _ensure_port_available(host: str, port: int) -> None:
+    """Fail before spawning when the configured TCP endpoint is already reserved."""
+
+    try:
+        addresses = socket.getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
+            flags=socket.AI_PASSIVE,
+        )
+    except socket.gaierror as exc:
+        raise RuntimeError(f"cannot resolve service host {host!r}: {exc}") from exc
+
+    seen: set[tuple[int, int, int, tuple[Any, ...]]] = set()
+    for family, socket_type, protocol, _, address in addresses:
+        key = (family, socket_type, protocol, tuple(address))
+        if key in seen:
+            continue
+        seen.add(key)
+        probe = socket.socket(family, socket_type, protocol)
+        try:
+            probe.bind(address)
+        except OSError as exc:
+            raise RuntimeError(
+                f"service port {host}:{port} is already in use. "
+                "No healthy imr-sqliblind service state was found. Stop the "
+                "process using that port or choose another port with "
+                "`sqliblind start --port PORT`."
+            ) from exc
+        finally:
+            probe.close()
+
+
+def _publish_state_after_start(
+    server: Any,
+    state_file: str | Path,
+    state: dict[str, Any],
+    stop_event: threading.Event,
+    *,
+    poll_interval: float = 0.02,
+) -> bool:
+    """Publish control state only after Uvicorn has successfully bound sockets."""
+
+    while not stop_event.is_set():
+        if bool(getattr(server, "started", False)):
+            atomic_write_json(state_file, state)
+            print(f"imr-sqliblind service listening at {state['url']}", flush=True)
+            return True
+        stop_event.wait(poll_interval)
+    return False
+
+
 def service_status(config_path: str | Path | None = None) -> dict[str, Any]:
     path, config = load_config(config_path)
     state = _read_state(config.state_file)
@@ -215,6 +269,8 @@ def start_service(
             "a service process exists but its control endpoint is unavailable; "
             "inspect the log and stop that process before starting another instance"
         )
+
+    _ensure_port_available(config.host, config.port)
     if foreground:
         run_service(path, host=config.host, port=config.port)
         return {"status": "stopped", "foreground": True, "config": str(path)}
@@ -337,6 +393,11 @@ def run_service(
             "Web dependencies are not installed. Reinstall with the native installer."
         ) from exc
 
+    # Repeat the parent-side check in the detached child to close the race between
+    # process creation and socket binding. State is still published only after the
+    # server reports that binding succeeded.
+    _ensure_port_available(config.host, config.port)
+
     from .manager import ScanManager
     from .service_admin_ui import create_admin_ui
     from .service_gateway import create_service_gateway
@@ -415,7 +476,14 @@ def run_service(
         "auth_database": config.auth_database,
         "workspace": config.workspace,
     }
-    atomic_write_json(config.state_file, state)
+    publisher_stop = threading.Event()
+    publisher = threading.Thread(
+        target=_publish_state_after_start,
+        args=(server, config.state_file, state, publisher_stop),
+        name="sqliblind-service-state",
+        daemon=True,
+    )
+    publisher.start()
     if bootstrapped:
         print(
             "SECURITY NOTICE: created bootstrap administrator admin/admin. "
@@ -429,10 +497,11 @@ def run_service(
             file=sys.stderr,
             flush=True,
         )
-    print(f"imr-sqliblind service listening at {url}", flush=True)
     try:
         server.run()
     finally:
+        publisher_stop.set()
+        publisher.join(timeout=1.0)
         _remove_state(config.state_file, control_token)
         manager.shutdown()
         store.close()
