@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
+from typing import TextIO
 
 from . import __version__
 from .cli import build_parser, main as cli_main
@@ -90,6 +91,36 @@ def _machine_output_requested(arguments: Sequence[str]) -> bool:
     )
 
 
+def _confirm_forced_update(
+    *,
+    input_stream: TextIO | None = None,
+    output_stream: TextIO | None = None,
+) -> bool:
+    source = input_stream or sys.stdin
+    destination = output_stream or sys.stderr
+    print("Update warning.", file=destination)
+    print(
+        "Saved changes could disappear during a forced update.",
+        file=destination,
+    )
+    print(
+        "Do you want to proceed? [y/N]: ",
+        end="",
+        file=destination,
+        flush=True,
+    )
+    try:
+        answer = source.readline()
+    except KeyboardInterrupt:
+        print(file=destination)
+        print("Update cancelled.", file=destination)
+        return False
+    if not answer or answer.strip().casefold() not in {"y", "yes"}:
+        print("Update cancelled.", file=destination)
+        return False
+    return True
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     raw_arguments = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -106,7 +137,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         try:
             if arguments and arguments[0] == "update":
-                return update_main(arguments[1:])
+                update_arguments = arguments[1:]
+                forced_update = (
+                    "--force" in update_arguments
+                    and "--check" not in update_arguments
+                )
+                if forced_update and not _confirm_forced_update():
+                    return 0
+                return update_main(update_arguments)
             if arguments and arguments[0] in SERVICE_COMMANDS:
                 return service_main(arguments)
             if arguments and arguments[0] in PRODUCTIVITY_COMMANDS:
