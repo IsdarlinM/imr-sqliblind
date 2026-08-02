@@ -1,0 +1,97 @@
+
+#entities {
+  display: block;
+}
+
+.activity-panel {
+  position: relative;
+  max-height: var(--activity-panel-height, none);
+  overflow: auto;
+}
+
+.graph-viewport {
+  height: var(--graph-height, clamp(420px, 68vh, 780px));
+}
+
+.professional-vertical-resizer {
+  position: sticky;
+  z-index: 7;
+  bottom: 0;
+  display: block;
+  width: 100%;
+  height: 10px;
+  min-height: 10px;
+  margin: 7px 0 -7px;
+  padding: 0;
+  cursor: ns-resize;
+  background:
+    linear-gradient(
+      90deg,
+      transparent calc(50% - 28px),
+      var(--line-strong) calc(50% - 28px),
+      var(--line-strong) calc(50% + 28px),
+      transparent calc(50% + 28px)
+    );
+  border: 0;
+  opacity: 0.72;
+}
+
+.professional-graph-minimap {
+  position: absolute;
+  z-index: 6;
+  right: 12px;
+  bottom: 12px;
+  width: 180px;
+  height: 112px;
+  max-width: 36%;
+  background: rgb(7 16 28 / 0.92);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.32);
+  cursor: crosshair;
+  opacity: 0.86;
+}
+
+.professional-graph-minimap:hover,
+.professional-graph-minimap:focus {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
+.professional-compare[data-collapsible="true"] .section-head {
+  align-items: center;
+}
+
+.professional-diff-results[hidden],
+.professional-compare-controls[hidden] {
+  display: none !important;
+}
+
+.ui-density-compact .professional-entity-row,
+.ui-density-compact .professional-event-row {
+  height: 30px;
+  min-height: 30px;
+}
+
+@media (max-width: 620px) {
+  .professional-graph-minimap {
+    width: 118px;
+    height: 76px;
+    right: 8px;
+    bottom: 8px;
+  }
+
+  .professional-vertical-resizer {
+    display: none;
+  }
+
+  .activity-panel {
+    max-height: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .professional-graph-minimap {
+    transition: none;
+  }
+}

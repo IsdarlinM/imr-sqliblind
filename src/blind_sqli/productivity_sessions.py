@@ -6,6 +6,7 @@ import shutil
 import sys
 import time
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 from .productivity_common import (
@@ -60,6 +61,7 @@ def sessions_main(arguments: Sequence[str]) -> int:
                         f"{scan['config'].get('url', '')}"
                     )
             return EXIT_OK
+
         if args.action == "show":
             snapshot = store.snapshot(args.scan_id)
             if snapshot is None:
@@ -68,11 +70,21 @@ def sessions_main(arguments: Sequence[str]) -> int:
                 json_print(snapshot)
             else:
                 scan = snapshot["scan"]
-                print(f"{scan['id']} · {scan['status']} · {scan['updated_at']}")
-                print(json.dumps(snapshot.get("counts", {}), ensure_ascii=False))
+                print(
+                    f"{scan['id']} · {scan['status']} · "
+                    f"{scan['updated_at']}"
+                )
+                print(
+                    json.dumps(
+                        snapshot.get("counts", {}),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
                 if scan.get("error"):
                     print(f"Error: {scan['error']}")
             return EXIT_OK
+
         if args.action == "diff":
             left = store.snapshot(args.left)
             right = store.snapshot(args.right)
@@ -87,17 +99,34 @@ def sessions_main(arguments: Sequence[str]) -> int:
                     for value in result[title]:
                         print(f"  {value}")
             return EXIT_OK
+
         if store.get_scan(args.scan_id) is None:
             raise ProductivityError(f"Unknown scan: {args.scan_id}")
         cursor = args.after
         while True:
-            rows = store.get_events(args.scan_id, after=cursor, limit=max(1, min(args.limit, 5000)))
+            rows = store.get_events(
+                args.scan_id,
+                after=cursor,
+                limit=max(1, min(args.limit, 5000)),
+            )
             for item in rows:
                 cursor = int(item["seq"])
                 if args.jsonl:
-                    print(json.dumps(item, ensure_ascii=False, separators=(",", ":")), flush=True)
+                    print(
+                        json.dumps(
+                            item,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        flush=True,
+                    )
                 else:
-                    print(f"{item['seq']} {item['timestamp']} {item['event']} {json.dumps(item['payload'], ensure_ascii=False)}", flush=True)
+                    print(
+                        f"{item['seq']} {item['timestamp']} "
+                        f"{item['event']} "
+                        f"{json.dumps(item['payload'], ensure_ascii=False)}",
+                        flush=True,
+                    )
             if not args.follow:
                 return EXIT_OK
             scan = store.get_scan(args.scan_id)
@@ -114,7 +143,11 @@ def _resume_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sqliblind resume")
     parser.add_argument("scan_id")
     parser.add_argument("--workspace")
-    parser.add_argument("--phase", choices=("map", "schemas", "tables", "columns", "rows"), default="map")
+    parser.add_argument(
+        "--phase",
+        choices=("map", "schemas", "tables", "columns", "rows"),
+        default="map",
+    )
     parser.add_argument("--schema")
     parser.add_argument("--table")
     parser.add_argument("--url")
@@ -136,7 +169,10 @@ def _option(result: list[str], name: str, value: object | None) -> None:
         result.extend((name, str(value)))
 
 
-def resume_arguments(config: dict[str, Any], args: argparse.Namespace) -> tuple[list[str], list[str]]:
+def resume_arguments(
+    config: dict[str, Any],
+    args: argparse.Namespace,
+) -> tuple[list[str], list[str]]:
     result: list[str] = []
     warnings: list[str] = []
     scalar = {
@@ -151,9 +187,19 @@ def resume_arguments(config: dict[str, Any], args: argparse.Namespace) -> tuple[
         "--length-tolerance": config.get("length_tolerance"),
         "--timeout": config.get("timeout"),
         "--retries": config.get("retries"),
-        "--delay": args.delay if args.delay is not None else config.get("delay"),
-        "--max-requests": args.max_requests if args.max_requests is not None else config.get("max_requests"),
-        "--workers": args.workers if args.workers is not None else config.get("workers"),
+        "--delay": (
+            args.delay if args.delay is not None else config.get("delay")
+        ),
+        "--max-requests": (
+            args.max_requests
+            if args.max_requests is not None
+            else config.get("max_requests")
+        ),
+        "--workers": (
+            args.workers
+            if args.workers is not None
+            else config.get("workers")
+        ),
         "--max-length": config.get("max_length"),
         "--max-items": config.get("max_items"),
         "--min-char-code": config.get("min_char_code"),
@@ -165,6 +211,7 @@ def resume_arguments(config: dict[str, Any], args: argparse.Namespace) -> tuple[
         scalar["--true-status"] = ",".join(str(item) for item in statuses)
     for name, value in scalar.items():
         _option(result, name, value)
+
     if config.get("insecure"):
         result.append("--insecure")
     if config.get("skip_calibration"):
@@ -175,9 +222,12 @@ def resume_arguments(config: dict[str, Any], args: argparse.Namespace) -> tuple[
         result.append("--no-adaptive-confirmation")
     if not config.get("adaptive_concurrency", True):
         result.append("--fixed-concurrency")
+
     for name, value in (config.get("headers") or {}).items():
         if value == "***":
-            warnings.append(f"Sensitive header {name!r} must be supplied again.")
+            warnings.append(
+                f"Sensitive header {name!r} must be supplied again."
+            )
         else:
             result.extend(("--header", f"{name}:{value}"))
     for name, value in (config.get("cookies") or {}).items():
@@ -189,12 +239,14 @@ def resume_arguments(config: dict[str, Any], args: argparse.Namespace) -> tuple[
         warnings.append("The proxy URL must be supplied again.")
     elif config.get("proxy"):
         result.extend(("--proxy", str(config["proxy"])))
+
     for header in args.header:
         result.extend(("--header", header))
     for cookie in args.cookie:
         result.extend(("--cookie", cookie))
     if args.proxy:
         result.extend(("--proxy", args.proxy))
+
     if args.phase == "map":
         result.append("map")
         include_data = config.get("include_data", True)
@@ -202,7 +254,12 @@ def resume_arguments(config: dict[str, Any], args: argparse.Namespace) -> tuple[
             result.append("--metadata-only")
         for selector in config.get("data_tables") or []:
             result.extend(("--data-table", str(selector)))
-        for option, key in (("--max-rows", "max_rows"), ("--max-data-columns", "max_data_columns"), ("--max-value-length", "max_value_length"), ("--max-data-bytes", "max_data_bytes")):
+        for option, key in (
+            ("--max-rows", "max_rows"),
+            ("--max-data-columns", "max_data_columns"),
+            ("--max-value-length", "max_value_length"),
+            ("--max-data-bytes", "max_data_bytes"),
+        ):
             _option(result, option, config.get(key))
         if config.get("reveal_sensitive_values"):
             result.append("--show-sensitive-values")
@@ -214,16 +271,27 @@ def resume_arguments(config: dict[str, Any], args: argparse.Namespace) -> tuple[
         result.extend(("tables", "--schema", args.schema))
     elif args.phase == "columns":
         if not args.schema or not args.table:
-            raise ProductivityError("--schema and --table are required for columns")
-        result.extend(("columns", "--schema", args.schema, "--table", args.table))
+            raise ProductivityError(
+                "--schema and --table are required for columns"
+            )
+        result.extend(
+            ("columns", "--schema", args.schema, "--table", args.table)
+        )
     else:
         if not args.schema or not args.table:
-            raise ProductivityError("--schema and --table are required for rows")
-        result.extend(("rows", "--schema", args.schema, "--table", args.table))
+            raise ProductivityError(
+                "--schema and --table are required for rows"
+            )
+        result.extend(
+            ("rows", "--schema", args.schema, "--table", args.table)
+        )
     return result, warnings
 
 
-def resume_main(arguments: Sequence[str], cli_main: Callable[[Sequence[str] | None], int]) -> int:
+def resume_main(
+    arguments: Sequence[str],
+    cli_main: Callable[[Sequence[str] | None], int],
+) -> int:
     args = _resume_parser().parse_args(arguments)
     store = SessionStore(workspace_database(args.workspace))
     try:
@@ -235,7 +303,11 @@ def resume_main(arguments: Sequence[str], cli_main: Callable[[Sequence[str] | No
     command, warnings = resume_arguments(scan["config"], args)
     for warning in warnings:
         print(f"Warning: {warning}", file=sys.stderr)
-    print("Resume starts a new verified run from stored non-secret settings; it does not splice incomplete values.", file=sys.stderr)
+    print(
+        "Resume starts a new verified run from stored non-secret settings; "
+        "it does not splice incomplete values.",
+        file=sys.stderr,
+    )
     if args.dry_run:
         print(" ".join(command))
         return EXIT_OK
@@ -259,22 +331,49 @@ def _clip(value: object, width: int) -> str:
 def _render_tui(snapshot: dict[str, Any], width: int) -> str:
     scan = snapshot["scan"]
     counts = snapshot.get("counts", {})
-    activities = [item for item in snapshot.get("activities", []) if item.get("status") == "running"]
+    activities = [
+        item
+        for item in snapshot.get("activities", [])
+        if item.get("status") == "running"
+    ]
     lines = [
         f"imr-sqliblind TUI · {_clip(scan['id'], 12)} · {scan['status']}",
         "─" * min(width, 110),
-        "Entities  " + "  ".join(f"{kind}:{counts.get(kind, 0)}" for kind in ("schema", "table", "column", "row", "cell")),
-        f"Requests:{scan.get('stats', {}).get('requests', 0)}  Updated:{scan.get('updated_at', '')}",
+        "Entities  "
+        + "  ".join(
+            f"{kind}:{counts.get(kind, 0)}"
+            for kind in ("schema", "table", "column", "row", "cell")
+        ),
+        (
+            f"Requests:{scan.get('stats', {}).get('requests', 0)}  "
+            f"Updated:{scan.get('updated_at', '')}"
+        ),
         "",
         "CURRENT ACTIVITY",
     ]
     if not activities:
         lines.append("  No active workers.")
     for activity in activities[:12]:
-        lines.append("  " + _clip(f"{activity.get('worker')} · {activity.get('operation')} · {activity.get('target')} · {activity.get('detail')}", max(20, width - 2)))
+        lines.append(
+            "  "
+            + _clip(
+                f"{activity.get('worker')} · "
+                f"{activity.get('operation')} · "
+                f"{activity.get('target')} · "
+                f"{activity.get('detail')}",
+                max(20, width - 2),
+            )
+        )
     lines.extend(("", "LATEST EVENTS"))
     for event in snapshot.get("events", [])[-10:]:
-        lines.append("  " + _clip(f"{event.get('seq')} {event.get('event')} {json.dumps(event.get('payload', {}), ensure_ascii=False)}", max(20, width - 2)))
+        lines.append(
+            "  "
+            + _clip(
+                f"{event.get('seq')} {event.get('event')} "
+                f"{json.dumps(event.get('payload', {}), ensure_ascii=False)}",
+                max(20, width - 2),
+            )
+        )
     return "\n".join(lines)
 
 
@@ -292,12 +391,19 @@ def tui_main(arguments: Sequence[str]) -> int:
             snapshot = store.snapshot(scan_id)
             if snapshot is None:
                 raise ProductivityError(f"Unknown scan: {scan_id}")
-            snapshot["events"] = store.get_events(scan_id, after=0, limit=5000)
+            snapshot["events"] = store.get_events(
+                scan_id,
+                after=0,
+                limit=5000,
+            )
             if sys.stdout.isatty():
                 print("\x1b[2J\x1b[H", end="")
             width = shutil.get_terminal_size((100, 30)).columns
             print(_render_tui(snapshot, width), flush=True)
-            if args.once or snapshot["scan"]["status"] in TERMINAL_SCAN_STATUSES:
+            if (
+                args.once
+                or snapshot["scan"]["status"] in TERMINAL_SCAN_STATUSES
+            ):
                 return EXIT_OK
             time.sleep(max(0.1, args.refresh))
     except KeyboardInterrupt:
