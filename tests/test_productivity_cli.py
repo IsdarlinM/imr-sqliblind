@@ -14,6 +14,7 @@ from blind_sqli.productivity_common import ProductivityError, snapshot_diff
 from blind_sqli.productivity_profiles import (
     ProfileStore,
     prepare_profile_arguments,
+    preview_main,
 )
 from blind_sqli.productivity_sessions import ObserverSessionStore, resume_arguments
 
@@ -40,6 +41,17 @@ class ProductivityCliTests(unittest.TestCase):
                     from blind_sqli.productivity_profiles import validate_profile_arguments
 
                     validate_profile_arguments(["--cookie", "session=secret"])
+
+    def test_preview_removes_non_serializable_parser_callback(self) -> None:
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(
+                preview_main(["--", "--url", "https://lab/", "schemas"]),
+                0,
+            )
+        document = json.loads(output.getvalue())
+        self.assertNotIn("func", document["configuration"])
+        self.assertEqual(document["command"], "schemas")
 
     def test_snapshot_diff_uses_canonical_hierarchy_paths(self) -> None:
         left = {

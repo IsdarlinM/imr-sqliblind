@@ -257,6 +257,7 @@ def preview_main(arguments: Sequence[str]) -> int:
     if not values:
         raise ProductivityError("Provide scan arguments after preview")
     parsed = vars(build_parser().parse_args(values))
+    parsed.pop("func", None)
     parsed["cookie"] = [
         f"{str(item).split('=', 1)[0]}=***"
         for item in parsed.get("cookie") or []
