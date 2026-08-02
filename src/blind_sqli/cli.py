@@ -61,16 +61,26 @@ def _add_data_options(
         parser.add_argument("--schema", required=True)
         parser.add_argument("--table", required=True)
     else:
-        parser.add_argument(
+        data_mode = parser.add_mutually_exclusive_group()
+        data_mode.add_argument(
             "--include-data",
+            dest="include_data",
             action="store_true",
-            help="Extract bounded row values from explicitly selected tables",
+            help="Extract bounded rows after columns (default)",
         )
+        data_mode.add_argument(
+            "--metadata-only",
+            dest="include_data",
+            action="store_false",
+            help="Discover schemas, tables and columns without row values",
+        )
+        parser.set_defaults(include_data=True)
         parser.add_argument(
             "--data-table",
             action="append",
             default=[],
             metavar="SCHEMA.TABLE",
+            help="Optional table filter; omit to process every discovered table",
         )
     parser.add_argument("--max-rows", type=int, default=5)
     parser.add_argument("--max-data-columns", type=int, default=10)
@@ -117,14 +127,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--delay",
         type=float,
-        default=0.1,
-        help="Global delay between request starts",
+        default=0.0,
+        help=(
+            "Global delay between request starts; default 0 uses bounded "
+            "concurrency and AIMD backoff"
+        ),
     )
     parser.add_argument("--max-requests", type=int, default=5000)
     parser.add_argument(
         "--workers",
         type=int,
-        default=4,
+        default=16,
         help="Concurrent probe and character workers (1-64)",
     )
     parser.add_argument("--max-length", type=int, default=128)
@@ -134,10 +147,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--inference-mode",
         choices=tuple(sorted(INFERENCE_MODES)),
-        default="adaptive",
+        default="turbo",
         help=(
-            "adaptive uses weighted numeric partitions; bitwise parallelizes "
-            "independent code bits"
+            "turbo schedules bit planes globally with checksum validation; "
+            "adaptive uses weighted partitions"
         ),
     )
     parser.add_argument(
@@ -206,7 +219,7 @@ def build_parser() -> argparse.ArgumentParser:
     graph = subparsers.add_parser(
         "map",
         aliases=("graph", "schema-map"),
-        help="Map schemas, tables and columns",
+        help="Map schemas, tables, columns and bounded rows",
     )
     graph.add_argument(
         "--format",
@@ -401,10 +414,6 @@ def _run_map(
     extractor: BlindExtractor,
 ) -> DatabaseMap:
     _validate_data_limits(args)
-    if args.include_data and not args.data_table:
-        raise ValueError(
-            "--include-data requires at least one --data-table SCHEMA.TABLE"
-        )
     return extractor.build_database_map(
         include_columns=not args.no_columns,
         include_data=args.include_data,

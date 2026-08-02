@@ -62,6 +62,8 @@ def load_asset(name: str) -> str:
             "web-menu.css",
             "web-menu-compat.css",
             "table-view.css",
+            "professional-ui.css",
+            "professional-ui-advanced.css",
         ],
         "inference-options.js": [
             "graph-interactions.js",
@@ -69,6 +71,9 @@ def load_asset(name: str) -> str:
             "web-menu-runtime.js",
             "table-view.js",
             "table-view-runtime.js",
+            "professional-ui.js",
+            "professional-ui-runtime.js",
+            "professional-ui-advanced.js",
         ],
     }.get(name, [])
     for companion in companions:

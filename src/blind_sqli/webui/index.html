@@ -84,14 +84,14 @@
             </label>
             <label>
               <span>Workers</span>
-              <input name="workers" type="number" min="1" max="16" value="4">
+              <input name="workers" type="number" min="1" max="16" value="16">
             </label>
           </div>
 
           <div class="field-grid field-grid--three">
             <label>
               <span>Delay</span>
-              <input name="delay" type="number" min="0" step="0.01" value="0.1">
+              <input name="delay" type="number" min="0" step="0.01" value="0">
             </label>
             <label>
               <span>Timeout</span>
@@ -115,7 +115,8 @@
                 <label>
                   <span>Inference mode</span>
                   <select name="inference_mode">
-                    <option value="adaptive" selected>adaptive · weighted numeric partitions</option>
+                    <option value="turbo" selected>turbo · bit planes + modulo checksum</option>
+                    <option value="adaptive">adaptive · weighted numeric partitions</option>
                     <option value="bitwise">bitwise · parallel code bits</option>
                     <option value="binary">binary · compatibility mode</option>
                   </select>
@@ -128,7 +129,7 @@
               <label class="check"><input name="parallel_characters" type="checkbox" checked>Infer character positions concurrently</label>
               <label class="check"><input name="adaptive_confirmation" type="checkbox" checked>Use adaptive confirmation and robust fallback</label>
               <label class="check"><input name="adaptive_concurrency" type="checkbox" checked>Reduce concurrency after HTTP 429 or network errors</label>
-              <p class="muted">Character discovery compares numeric codes only. Percent (37) and underscore (95) are never submitted as LIKE patterns.</p>
+              <p class="muted">Turbo schedules lengths, integers, character bits and modulo-3 checks in global waves, then confirms each complete identifier. Character discovery compares numeric codes only.</p>
             </div>
           </details>
 
@@ -160,13 +161,13 @@
             </div>
           </details>
 
-          <details>
+          <details open>
             <summary>Bounded row values</summary>
             <div class="details-content">
-              <label class="check"><input name="include_data" type="checkbox"><span>Enable explicit row extraction</span></label>
+              <label class="check"><input name="include_data" type="checkbox" checked><span>Extract bounded rows after every table's columns</span></label>
               <label>
-                <span>Allowed tables</span>
-                <input name="data_tables" placeholder="schema.table, other.table">
+                <span>Optional table filter</span>
+                <input name="data_tables" placeholder="Leave empty for all; or schema.table, other.table">
               </label>
               <div class="field-grid field-grid--two">
                 <label><span>Rows</span><input name="max_rows" type="number" min="1" max="25" value="5"></label>

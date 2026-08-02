@@ -88,6 +88,14 @@ class BatchStore:
 
 
 class CliWebPerformanceTests(unittest.TestCase):
+    def test_cli_defaults_to_turbo_bounded_full_mapping(self) -> None:
+        args = build_parser().parse_args(["map"])
+        self.assertEqual(args.inference_mode, "turbo")
+        self.assertEqual(args.workers, 16)
+        self.assertEqual(args.delay, 0.0)
+        self.assertTrue(args.include_data)
+        self.assertEqual(args.data_table, [])
+
     def test_cli_exposes_and_routes_optimized_modes(self) -> None:
         args = build_parser().parse_args(
             [
@@ -132,7 +140,7 @@ class CliWebPerformanceTests(unittest.TestCase):
         response = client.get("/?token=secret", follow_redirects=True)
         self.assertEqual(response.status_code, 200)
         self.assertIn('name="inference_mode"', response.text)
-        self.assertIn("Percent (37) and underscore (95)", response.text)
+        self.assertIn("modulo-3 checks in global waves", response.text)
 
         response = client.post(
             "/api/scans",
