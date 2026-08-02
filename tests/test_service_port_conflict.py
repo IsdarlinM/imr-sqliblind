@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import socket
 import threading
 import time
@@ -13,6 +14,7 @@ from blind_sqli import service_runtime
 
 def test_port_guard_rejects_an_active_listener() -> None:
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
     listener.listen(1)
     port = int(listener.getsockname()[1])
@@ -29,6 +31,30 @@ def test_port_guard_accepts_a_free_loopback_port() -> None:
     port = int(temporary.getsockname()[1])
     temporary.close()
 
+    service_runtime._ensure_port_available("127.0.0.1", port)
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="SO_REUSEADDR has different listener semantics on Windows",
+)
+def test_port_guard_accepts_immediate_restart_after_closed_connection() -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = int(listener.getsockname()[1])
+
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.connect(("127.0.0.1", port))
+    connection, _ = listener.accept()
+    connection.shutdown(socket.SHUT_RDWR)
+    connection.close()
+    client.close()
+    listener.close()
+
+    # The closed connection can leave the server port in TIME_WAIT. A service
+    # restart must still be allowed because Uvicorn also enables SO_REUSEADDR.
     service_runtime._ensure_port_available("127.0.0.1", port)
 
 
