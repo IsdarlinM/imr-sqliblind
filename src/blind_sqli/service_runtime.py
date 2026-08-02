@@ -23,6 +23,33 @@ _WINDOWS_ERROR_ACCESS_DENIED = 5
 _WINDOWS_MAX_PID = 0xFFFFFFFF
 
 
+def _service_python_executable() -> str:
+    """Use the windowless Python launcher for detached Windows services."""
+
+    executable = os.fspath(sys.executable)
+    if os.name != "nt" or os.path.basename(executable).casefold() == "pythonw.exe":
+        return executable
+    windowless = os.path.join(os.path.dirname(executable), "pythonw.exe")
+    return windowless if os.path.isfile(windowless) else executable
+
+
+def _windows_process_options() -> tuple[int, Any | None]:
+    """Return flags that detach the service and prevent a visible console window."""
+
+    creationflags = (
+        getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        | getattr(subprocess, "DETACHED_PROCESS", 0)
+        | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    )
+    startupinfo_factory = getattr(subprocess, "STARTUPINFO", None)
+    if startupinfo_factory is None:
+        return creationflags, None
+    startupinfo = startupinfo_factory()
+    startupinfo.dwFlags |= getattr(subprocess, "STARTF_USESHOWWINDOW", 0)
+    startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
+    return creationflags, startupinfo
+
+
 def add_inner_csrf_cookie_middleware(
     app: Any,
     *,
@@ -285,7 +312,7 @@ def start_service(
     log_path = Path(config.log_file)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     command = [
-        sys.executable,
+        _service_python_executable(),
         "-m",
         "blind_sqli",
         "_service-run",
@@ -297,15 +324,13 @@ def start_service(
         str(config.port),
     ]
     creationflags = 0
-    popen_kwargs: dict[str, Any] = {}
+    popen_kwargs: dict[str, Any] = {"close_fds": True}
     if os.name == "nt":
-        creationflags = (
-            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
-            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        )
+        creationflags, startupinfo = _windows_process_options()
+        if startupinfo is not None:
+            popen_kwargs["startupinfo"] = startupinfo
     else:
-        popen_kwargs.update(start_new_session=True, close_fds=True)
+        popen_kwargs["start_new_session"] = True
     with log_path.open("ab", buffering=0) as log_handle:
         process = subprocess.Popen(
             command,
