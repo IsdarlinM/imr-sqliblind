@@ -15,7 +15,7 @@ from blind_sqli.productivity_profiles import (
     ProfileStore,
     prepare_profile_arguments,
 )
-from blind_sqli.productivity_sessions import resume_arguments
+from blind_sqli.productivity_sessions import ObserverSessionStore, resume_arguments
 
 
 class ProductivityCliTests(unittest.TestCase):
@@ -110,6 +110,26 @@ class ProductivityCliTests(unittest.TestCase):
         self.assertIn("Accept:text/html", command)
         self.assertNotIn("Authorization:***", command)
         self.assertGreaterEqual(len(warnings), 3)
+
+    def test_observer_store_does_not_interrupt_running_scans(self) -> None:
+        from blind_sqli.store import SessionStore
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sessions.db"
+            store = SessionStore(path)
+            store.create_scan("active", {"url": "https://lab/"}, "2026-08-01T00:00:00+00:00")
+            store.update_scan(
+                "active",
+                status="running",
+                timestamp="2026-08-01T00:00:01+00:00",
+            )
+            store.close()
+
+            observer = ObserverSessionStore(path)
+            try:
+                self.assertEqual(observer.get_scan("active")["status"], "running")
+            finally:
+                observer.close()
 
     def test_jsonl_output_is_one_record_per_result_plus_summary(self) -> None:
         def fake_cli(arguments):

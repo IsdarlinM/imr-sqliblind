@@ -21,6 +21,13 @@ from .productivity_common import (
 from .store import SessionStore
 
 
+class ObserverSessionStore(SessionStore):
+    """Open the workspace without changing active scan status."""
+
+    def mark_running_as_interrupted(self) -> None:
+        return
+
+
 def _sessions_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sqliblind sessions")
     parser.add_argument("--workspace")
@@ -47,7 +54,7 @@ def _sessions_parser() -> argparse.ArgumentParser:
 
 def sessions_main(arguments: Sequence[str]) -> int:
     args = _sessions_parser().parse_args(arguments)
-    store = SessionStore(workspace_database(args.workspace))
+    store = ObserverSessionStore(workspace_database(args.workspace))
     try:
         if args.action == "list":
             scans = store.list_scans(limit=max(1, min(args.limit, 1000)))
@@ -293,7 +300,7 @@ def resume_main(
     cli_main: Callable[[Sequence[str] | None], int],
 ) -> int:
     args = _resume_parser().parse_args(arguments)
-    store = SessionStore(workspace_database(args.workspace))
+    store = ObserverSessionStore(workspace_database(args.workspace))
     try:
         scan = store.get_scan(args.scan_id)
     finally:
@@ -379,7 +386,7 @@ def _render_tui(snapshot: dict[str, Any], width: int) -> str:
 
 def tui_main(arguments: Sequence[str]) -> int:
     args = _tui_parser().parse_args(arguments)
-    store = SessionStore(workspace_database(args.workspace))
+    store = ObserverSessionStore(workspace_database(args.workspace))
     try:
         scan_id = args.scan_id
         if not scan_id:
