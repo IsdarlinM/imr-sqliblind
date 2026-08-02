@@ -180,7 +180,14 @@ def _ensure_port_available(host: str, port: int) -> None:
         seen.add(key)
         probe = socket.socket(family, socket_type, protocol)
         try:
+            # Match Uvicorn's POSIX socket behavior so a recently stopped
+            # listener in TIME_WAIT does not look like a live port conflict.
+            # Windows has different SO_REUSEADDR semantics, so keep the
+            # exclusive default there.
+            if os.name != "nt":
+                probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(address)
+            probe.listen(1)
         except OSError as exc:
             raise RuntimeError(
                 f"service port {host}:{port} is already in use. "
